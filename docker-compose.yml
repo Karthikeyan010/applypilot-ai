@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: applypilot-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: applypilot_db
+      POSTGRES_USER: applypilot_user
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - applypilot_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  applypilot_postgres_data:
