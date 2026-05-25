@@ -1,0 +1,15 @@
+# Local H2 database files
+data/
+*.mv.db
+*.trace.db
+
+# IntelliJ files
+.idea/
+*.iml
+
+# Build folders
+target/
+backend/target/
+
+# Environment files
+.env
