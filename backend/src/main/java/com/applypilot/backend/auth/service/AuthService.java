@@ -2,6 +2,7 @@ package com.applypilot.backend.auth.service;
 import com.applypilot.backend.auth.dto.AuthResponse;
 import com.applypilot.backend.auth.dto.LoginRequest;
 import com.applypilot.backend.auth.dto.RegisterRequest;
+import com.applypilot.backend.auth.security.JwtService;
 import com.applypilot.backend.user.entity.User;
 import com.applypilot.backend.user.repository.UserRepo;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ public class AuthService {
 
     private final UserRepo userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
 
     public AuthResponse register(RegisterRequest request) {
         String email = request.getEmail().toLowerCase();
@@ -30,8 +32,10 @@ public class AuthService {
 
         User savedUser = userRepository.save(user);
 
+        String token = jwtService.generateToken(savedUser);
+
         return AuthResponse.builder()
-                .token("temporary-token")
+                .token(token)
                 .userId(savedUser.getId())
                 .fullName(savedUser.getFullName())
                 .email(savedUser.getEmail())
@@ -52,9 +56,10 @@ public class AuthService {
         if (!passwordMatches) {
             throw new RuntimeException("Invalid email or password");
         }
+        String token = jwtService.generateToken(user);
 
         return AuthResponse.builder()
-                .token("temporary-token")
+                .token(token)
                 .userId(user.getId())
                 .fullName(user.getFullName())
                 .email(user.getEmail())
