@@ -14,7 +14,7 @@ public class ContactInfoExtractor {
 
     private static final Pattern PHONE_PATTERN =
             Pattern.compile("(\\+?\\d[\\d\\s()\\-]{7,}\\d)");
-    
+
     public ContactInfoDto extract(String headerText){
 
         if(headerText == null || headerText.isBlank()){
