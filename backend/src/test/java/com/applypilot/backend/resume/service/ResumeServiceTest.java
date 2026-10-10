@@ -1,27 +1,20 @@
 package com.applypilot.backend.resume.service;
 
-import com.applypilot.backend.resume.repository.ResumeRepository;
 import com.applypilot.backend.user.entity.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 
-import java.nio.charset.StandardCharsets;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 public class ResumeServiceTest {
 
-    private ResumeRepository resumeRepository;
     private ResumeService resumeService;
 
     @BeforeEach
     void setUp(){
-        resumeRepository = mock(ResumeRepository.class);
-        resumeService = new ResumeService(resumeRepository);
+        resumeService = new ResumeService(null);
     }
 
     @Test
@@ -46,7 +39,6 @@ public class ResumeServiceTest {
                 exception.getMessage()
         );
 
-        verifyNoInteractions(resumeRepository);
     }
 
     @Test
@@ -70,8 +62,6 @@ public class ResumeServiceTest {
                 "Only PDF resumes are supported",
                 exception.getMessage()
         );
-
-        verifyNoInteractions(resumeRepository);
 
     }
 }

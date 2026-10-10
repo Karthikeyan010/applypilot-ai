@@ -2,6 +2,7 @@ package com.applypilot.backend.resume.controller;
 
 import com.applypilot.backend.resume.dto.ResumeResponse;
 import com.applypilot.backend.resume.entity.Resume;
+import com.applypilot.backend.resume.service.ResumeExtractionService;
 import com.applypilot.backend.resume.service.ResumeService;
 import com.applypilot.backend.user.entity.User;
 import com.applypilot.backend.user.repository.UserRepo;
@@ -20,10 +21,12 @@ import java.io.IOException;
 public class ResumeController {
 
     private final ResumeService resumeService;
+    private final ResumeExtractionService resumeExtractionService;
     private final UserRepo userRepo;
 
-    public ResumeController(ResumeService resumeService, UserRepo userRepo) {
+    public ResumeController(ResumeService resumeService, ResumeExtractionService resumeExtractionService, UserRepo userRepo) {
         this.resumeService = resumeService;
+        this.resumeExtractionService = resumeExtractionService;
         this.userRepo = userRepo;
     }
 
@@ -41,6 +44,7 @@ public class ResumeController {
                 .userId(user.getId())
                 .fileName(resume.getFileName())
                 .extractedText(resume.getExtractedText())
+                .parsedProfile(resumeExtractionService.extract(resume.getExtractedText()))
                 .uploadedAt(resume.getUploadedAt())
                 .build();
 

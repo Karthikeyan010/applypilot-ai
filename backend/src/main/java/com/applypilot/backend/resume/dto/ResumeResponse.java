@@ -13,5 +13,6 @@ public class ResumeResponse {
     private Long userId;
     private String fileName;
     private String extractedText;
+    private ResumeProfileResponse parsedProfile;
     private LocalDateTime uploadedAt;
 }

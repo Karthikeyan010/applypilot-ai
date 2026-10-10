@@ -10,9 +10,11 @@ import java.util.List;
 public class ExperienceDto {
 
     private String company;
+    private String jobTitle;
     private String jobTittle;
     private String startDate;
     private String endDate;
     private String location;
     private List<String> responsibilities;
+    private String originalText;
 }

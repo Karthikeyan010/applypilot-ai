@@ -13,4 +13,5 @@ public class EducationDto {
     private String startDate;
     private String endDate;
     private String location;
+    private String originalText;
 }
