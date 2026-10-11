@@ -62,7 +62,7 @@ public class SectionExtractor {
         String value = content.toString().trim();
 
         if(!value.isEmpty()){
-            sections.put(sectionName,value);
+            sections.merge(sectionName, value, (previous, next) -> previous + "\n" + next);
         }
     }
 
@@ -103,6 +103,8 @@ public class SectionExtractor {
                  "awards",
                  "awards and achievements" ->
                     "achievements";
+
+            case "certifications", "certificates", "licenses and certifications" -> "certifications";
 
             default -> null;
         };
