@@ -14,5 +14,6 @@ public class ResumeResponse {
     private String fileName;
     private String extractedText;
     private ResumeProfileResponse parsedProfile;
+    private String parsingError;
     private LocalDateTime uploadedAt;
 }

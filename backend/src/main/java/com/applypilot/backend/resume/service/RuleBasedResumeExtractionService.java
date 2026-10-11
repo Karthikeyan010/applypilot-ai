@@ -15,7 +15,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,6 +29,8 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
     private static final Pattern DEGREE_PATTERN = Pattern.compile(
             "(?i)\\b(B\\.?Sc\\.?|M\\.?Sc\\.?|B\\.?A\\.?|M\\.?A\\.?|B\\.?Eng\\.?|M\\.?Eng\\.?|Bachelor|Master|MBA|PhD|Doctorate|Diploma|Certificate)\\b"
     );
+    private static final Pattern INSTITUTION_PATTERN = Pattern.compile("(?i)\\b(university|college|school|institute)\\b");
+    private static final Pattern LOCATION_PATTERN = Pattern.compile("(?i)^(remote|hybrid|on[- ]?site)$|^[^|]+,\\s*[^|]+$");
 
     private final SectionExtractor sectionExtractor;
     private final ContactInfoExtractor contactInfoExtractor;
@@ -57,7 +58,7 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
                 .phone(contactInfo.getPhone())
                 .location(contactInfo.getLocation())
                 .summary(blankToNull(sections.get("summary")))
-                .originalText(normalizedText)
+                .originalText(extractedText == null ? "" : extractedText)
                 .unmatchedText(buildUnmatchedText(sections))
                 .skills(skillsExtractor.extract(sections.get("skills")))
                 .experience(parseExperience(sections.get("experience")))
@@ -67,20 +68,20 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
     }
 
     private List<ExperienceDto> parseExperience(String experienceText) {
-        return splitEntries(experienceText, this::isExperienceStart).stream()
+        return splitEntries(experienceText, EntryType.EXPERIENCE).stream()
                 .map(this::parseExperienceEntry)
                 .toList();
     }
 
     private ExperienceDto parseExperienceEntry(List<String> lines) {
         String originalText = String.join("\n", lines);
-        List<String> headerLines = lines.stream()
-                .filter(line -> !isBulletLine(line))
-                .filter(line -> !isDescriptionContinuation(line))
-                .takeWhile(line -> responsibilitiesHaveNotStarted(lines, line))
-                .toList();
-        List<String> responsibilities = lines.stream()
-                .filter(line -> !headerLines.contains(line))
+        int headerEnd = 0;
+        while (headerEnd < lines.size() && !isBulletLine(lines.get(headerEnd))
+                && !isDescriptionContinuation(lines.get(headerEnd))) {
+            headerEnd++;
+        }
+        List<String> headerLines = lines.subList(0, headerEnd);
+        List<String> responsibilities = lines.subList(headerEnd, lines.size()).stream()
                 .map(this::cleanBullet)
                 .filter(line -> !line.isBlank())
                 .toList();
@@ -125,18 +126,8 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
                 .build();
     }
 
-    private boolean responsibilitiesHaveNotStarted(List<String> lines, String candidate) {
-        int candidateIndex = lines.indexOf(candidate);
-        for (int index = 0; index < candidateIndex; index++) {
-            if (isBulletLine(lines.get(index))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private List<ProjectDto> parseProjects(String projectsText) {
-        return splitEntries(projectsText, this::isProjectStart).stream()
+        return splitEntries(projectsText, EntryType.PROJECT).stream()
                 .map(this::parseProjectEntry)
                 .toList();
     }
@@ -151,9 +142,7 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
 
         for (int index = 1; index < lines.size(); index++) {
             String line = lines.get(index);
-            if (line.toLowerCase().startsWith("technologies:")
-                    || line.toLowerCase().startsWith("tech stack:")
-                    || line.toLowerCase().startsWith("tools:")) {
+            if (isTechnologyLine(line)) {
                 addTechnologies(line.substring(line.indexOf(":") + 1), technologies);
             } else {
                 String cleaned = cleanBullet(line);
@@ -172,7 +161,7 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
     }
 
     private List<EducationDto> parseEducation(String educationText) {
-        return splitEntries(educationText, this::isEducationStart).stream()
+        return splitEntries(educationText, EntryType.EDUCATION).stream()
                 .map(this::parseEducationEntry)
                 .toList();
     }
@@ -186,14 +175,15 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
         String endDate = null;
         String location = null;
 
-        for (String part : splitMetadata(lines)) {
-            DateRange dateRange = extractDateRange(part);
+        for (String line : lines) {
+            DateRange dateRange = extractDateRange(line);
             if (dateRange != null) {
                 startDate = firstNonBlank(startDate, dateRange.startDate());
                 endDate = firstNonBlank(endDate, dateRange.endDate());
-                continue;
             }
+        }
 
+        for (String part : splitMetadata(lines.stream().filter(line -> !isBulletLine(line)).toList())) {
             if (degree == null && DEGREE_PATTERN.matcher(part).find()) {
                 degree = part;
                 fieldOfStudy = extractFieldOfStudy(part);
@@ -215,26 +205,19 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
                 .build();
     }
 
-    private List<List<String>> splitEntries(String sectionText, Predicate<String> startPredicate) {
+    private List<List<String>> splitEntries(String sectionText, EntryType type) {
         List<List<String>> entries = new ArrayList<>();
         List<String> current = new ArrayList<>();
-        boolean currentHasDescription = false;
+        List<String> sectionLines = lines(sectionText);
 
-        for (String line : lines(sectionText)) {
-            boolean startsNewEntry = !current.isEmpty()
-                    && startPredicate.test(line)
-                    && (containsDate(line) || currentHasDescription || current.size() >= 2);
-
-            if (startsNewEntry) {
+        for (int index = 0; index < sectionLines.size(); index++) {
+            String line = sectionLines.get(index);
+            if (!current.isEmpty() && startsEntry(sectionLines, index, current, type)) {
                 entries.add(current);
                 current = new ArrayList<>();
-                currentHasDescription = false;
             }
 
             current.add(line);
-            if (isBulletLine(line)) {
-                currentHasDescription = true;
-            }
         }
 
         if (!current.isEmpty()) {
@@ -244,25 +227,55 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
         return entries;
     }
 
-    private boolean isExperienceStart(String line) {
-        return !isBulletLine(line) && !isDescriptionContinuation(line);
+    private boolean startsEntry(List<String> lines, int index, List<String> current, EntryType type) {
+        String line = lines.get(index);
+        if (isBulletLine(line) || isDescriptionContinuation(line) || isTechnologyLine(line)
+                || DATE_RANGE_PATTERN.matcher(line).lookingAt() || YEAR_PATTERN.matcher(line).matches()
+                || splitMetadata(List.of(line)).isEmpty()) {
+            return false;
+        }
+        boolean hasDescription = current.stream().anyMatch(value ->
+                isBulletLine(value) || isDescriptionContinuation(value));
+        boolean hasDate = current.stream().anyMatch(this::containsDate);
+        if (type == EntryType.EDUCATION) {
+            boolean hasDegree = current.stream().anyMatch(value -> DEGREE_PATTERN.matcher(value).find());
+            boolean isDegree = DEGREE_PATTERN.matcher(line).find();
+            boolean isInstitution = INSTITUTION_PATTERN.matcher(line).find();
+            return hasDegree && (isInstitution || (isDegree && hasDate));
+        }
+        if (LOCATION_PATTERN.matcher(line).find()) {
+            return false;
+        }
+        if (type == EntryType.PROJECT) {
+            boolean hasTechnologies = current.stream().anyMatch(this::isTechnologyLine)
+                    || current.getFirst().contains("|");
+            boolean nextIsMetadataOrDescription = index + 1 < lines.size()
+                    && (isTechnologyLine(lines.get(index + 1)) || isBulletLine(lines.get(index + 1))
+                    || isDescriptionContinuation(lines.get(index + 1)));
+            return (hasDescription || hasTechnologies) && (line.contains("|") || nextIsMetadataOrDescription);
+        }
+        // A date on its own belongs to the current header. Look ahead from a new title
+        // so adjacent multiline headers work even when the preceding job has no bullets.
+        boolean upcomingDate = false;
+        for (int next = index; next < Math.min(index + 4, lines.size()); next++) {
+            if (isBulletLine(lines.get(next)) || isDescriptionContinuation(lines.get(next))) {
+                break;
+            }
+            upcomingDate |= containsDate(lines.get(next));
+        }
+        return (hasDate || hasDescription) && upcomingDate;
     }
 
-    private boolean isProjectStart(String line) {
-        return !isBulletLine(line)
-                && !line.toLowerCase().startsWith("technologies:")
-                && !line.toLowerCase().startsWith("tech stack:");
-    }
-
-    private boolean isEducationStart(String line) {
-        return !isBulletLine(line);
+    private boolean isTechnologyLine(String line) {
+        return line.toLowerCase(java.util.Locale.ROOT).matches("^(technologies|tech stack|tools):.*");
     }
 
     private boolean isDescriptionContinuation(String line) {
-        String lowerCaseLine = line.toLowerCase();
+        String lowerCaseLine = line.toLowerCase(java.util.Locale.ROOT);
         return lowerCaseLine.startsWith("responsibilities:")
                 || lowerCaseLine.startsWith("achievements:")
-                || lowerCaseLine.startsWith("description:");
+                || lowerCaseLine.startsWith("description:")
+                || lowerCaseLine.matches("^(developed|built|maintained|created|implemented|led|reduced|added)\\b.*");
     }
 
     private List<String> splitMetadata(List<String> lines) {
@@ -351,11 +364,12 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
     }
 
     private String buildUnmatchedText(Map<String, String> sections) {
-        Set<String> structuredSections = Set.of("skills", "experience", "projects", "education");
         StringBuilder unmatchedText = new StringBuilder();
 
+        // Conservative source fallback: heuristic fields do not prove that every part
+        // of a recognized section was understood. Keep that section available too.
         for (Map.Entry<String, String> section : sections.entrySet()) {
-            if (!structuredSections.contains(section.getKey()) && !section.getValue().isBlank()) {
+            if (!section.getKey().equals("summary") && !section.getValue().isBlank()) {
                 unmatchedText
                         .append(section.getKey().toUpperCase())
                         .append("\n")
@@ -387,4 +401,6 @@ public class RuleBasedResumeExtractionService implements ResumeExtractionService
 
     private record DateRange(String startDate, String endDate) {
     }
+
+    private enum EntryType { EXPERIENCE, PROJECT, EDUCATION }
 }

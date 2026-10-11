@@ -67,6 +67,7 @@ Example response shape:
     "originalText": "Jordan Lee\n...",
     "unmatchedText": "HEADER\nJordan Lee\n..."
   },
+  "parsingError": null,
   "uploadedAt": "2026-10-11T10:15:30"
 }
 ```
@@ -76,6 +77,14 @@ headings such as `Summary`, `Skills`, `Experience`, `Projects`, and `Education`.
 Multiple experience, project, and education entries are supported when entries
 use common heading/date/bullet patterns, especially pipe-delimited metadata such
 as `Role | Company | Location | Jan 2022 - Present`.
+Multiline role/company/date and institution/degree/date headers are also
+supported, including adjacent entries without blank lines. Project metadata may
+use `Technologies:`, `Tech stack:`, or `Tools:`.
+
+If structured parsing fails after persistence, the upload still returns HTTP 200
+with its saved ID and complete `extractedText`, `parsedProfile: null`, and
+`parsingError: "Resume saved, but structured profile extraction failed."`.
+Successful parsing returns `parsingError: null`.
 
 Limitations:
 
@@ -83,6 +92,19 @@ Limitations:
   returned as `null` or empty lists.
 - Descriptive bullets and each entry's `originalText` are preserved so users can
   correct extraction results later.
-- Unstructured sections such as awards are exposed through `unmatchedText`.
+- `parsedProfile.originalText` preserves the exact source string, including line
+  endings and whitespace. Entry `originalText` uses trimmed lines and LF endings.
+- `unmatchedText` is a conservative source fallback: it includes the complete
+  content of recognized sections as well as awards and certifications, except
+  summary content already exposed as `summary`. It can duplicate structured
+  fields; this deliberately keeps uncertain metadata and unexpected lines
+  inspectable instead of claiming every part of a section was parsed.
 - Certifications are not yet represented as first-class DTOs and should be added
   in a follow-up issue when the response model is expanded.
+  Issue #7 explicitly allows this deferral; certification source text remains
+  available in `originalText` and `unmatchedText`.
+
+Backend verification (from `backend` on Windows): `./mvnw.cmd test`.
+The Spring Boot context test uses a test-only H2 database and an explicit test JWT
+secret. Surefire starts Mockito's agent explicitly to avoid dynamic agent
+attachment; no external database or AI service is required for the tests.
