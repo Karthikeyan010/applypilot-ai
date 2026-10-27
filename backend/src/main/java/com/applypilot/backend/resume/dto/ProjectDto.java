@@ -12,4 +12,5 @@ public class ProjectDto {
    private String name;
    private List<String> technologies;
    private List<String> description;
+   private String originalText;
 }
