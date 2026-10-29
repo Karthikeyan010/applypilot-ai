@@ -59,6 +59,70 @@ class ResumeControllerTest {
     }
 
     @Test
+    void invalidUploadsReturn400WithoutDetails() throws Exception {
+        for (MockMultipartFile file : new MockMultipartFile[]{
+                new MockMultipartFile("file", "empty.pdf", "application/pdf", new byte[0]),
+                new MockMultipartFile("file", "cv.txt", "text/plain", new byte[]{1}),
+                new MockMultipartFile("file", "broken.pdf", "application/pdf", new byte[]{1, 2}),
+                new MockMultipartFile("file", "x".repeat(256), "application/pdf", new byte[]{1})}) {
+            mvc.perform(multipart("/api/resumes/upload").file(file)
+                    .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
+                    .andExpect(status().isBadRequest()).andExpect(content().string(""));
+        }
+        verifyNoInteractions(resumes, parser);
+    }
+
+    @Test
+    void internalReadFailureReturns500() throws Exception {
+        // MockMultipartFile can model a server-side failure while retrieving stored multipart bytes.
+        var unreadable = new MockMultipartFile("file", "cv.pdf", "application/pdf", new byte[]{1}) {
+            @Override public byte[] getBytes() throws java.io.IOException {
+                throw new java.io.IOException("private storage path");
+            }
+        };
+        mvc.perform(multipart("/api/resumes/upload").file(unreadable)
+                .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
+                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+        verifyNoInteractions(resumes, parser);
+    }
+
+    @Test
+    void databaseAndUnexpectedFailuresReturn500() throws Exception {
+        for (RuntimeException failure : new RuntimeException[]{
+                new org.springframework.dao.DataAccessResourceFailureException("private database detail"),
+                new IllegalArgumentException("private converter detail"),
+                new IllegalStateException("private processing detail")}) {
+            when(resumes.save(any(Resume.class))).thenThrow(failure);
+            mvc.perform(multipart("/api/resumes/upload").file(pdf())
+                    .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
+                    .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+        }
+    }
+
+    @Test
+    void getAndPutDatabaseFailuresReturn500WithoutDetails() throws Exception {
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("private database detail"))
+                .when(resumes).findByIdAndUserId(7L, 42L);
+        var principal = new UsernamePasswordAuthenticationToken("jordan@example.com", "unused");
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/resumes/7")
+                .principal(principal)).andExpect(status().isInternalServerError()).andExpect(content().string(""));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/resumes/7/profile")
+                .principal(principal).contentType("application/json").content("{}"))
+                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+    }
+
+    @Test
+    void profilePersistenceFailureReturns500() throws Exception {
+        when(parser.extract(anyString())).thenReturn(
+                com.applypilot.backend.resume.dto.ResumeProfileResponse.builder().build());
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("private database detail"))
+                .when(resumes).findByIdAndUserId(7L, 42L);
+        mvc.perform(multipart("/api/resumes/upload").file(pdf())
+                .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
+                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+    }
+
+    @Test
     void shouldReturnSavedSourceAndParsedProfileIncludingBothJobTitleFields() throws Exception {
         var realParser = new RuleBasedResumeExtractionService(new SectionExtractor(),
                 new ContactInfoExtractor(), new SkillsExtractor());

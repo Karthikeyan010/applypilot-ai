@@ -56,7 +56,14 @@ public class ResumeService {
 
     private String extractText(MultipartFile file) throws IOException {
 
-        try(PDDocument document = Loader.loadPDF(file.getBytes())){
+        byte[] bytes = file.getBytes();
+        PDDocument loaded;
+        try {
+            loaded = Loader.loadPDF(bytes);
+        } catch (IOException invalidPdf) {
+            throw new InvalidResumeUploadException("Resume must be a readable, unencrypted PDF");
+        }
+        try(PDDocument document = loaded){
 
             PDFTextStripper textStripper = new PDFTextStripper();
 
@@ -67,11 +74,15 @@ public class ResumeService {
     private void validateFile(MultipartFile file) {
 
         if(file == null || file.isEmpty()){
-            throw new IllegalArgumentException("Resume file cannot be empty");
+            throw new InvalidResumeUploadException("Resume file cannot be empty");
         }
 
         if(!"application/pdf".equalsIgnoreCase(file.getContentType())){
-            throw new IllegalArgumentException("Only PDF resumes are supported");
+            throw new InvalidResumeUploadException("Only PDF resumes are supported");
+        }
+        if (file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                || file.getOriginalFilename().length() > 255) {
+            throw new InvalidResumeUploadException("Invalid resume filename");
         }
     }
 }

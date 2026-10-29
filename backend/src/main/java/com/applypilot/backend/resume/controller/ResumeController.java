@@ -84,8 +84,20 @@ public class ResumeController {
                 .parsingError(resume.getParsingError()).uploadedAt(resume.getUploadedAt()).build();
     }
 
-    @ExceptionHandler({IllegalArgumentException.class, IOException.class})
+    @ExceptionHandler({com.applypilot.backend.resume.service.InvalidResumeUploadException.class,
+            org.springframework.http.converter.HttpMessageNotReadableException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class})
     public ResponseEntity<Void> invalidUpload(Exception exception) {
         return ResponseEntity.badRequest().build();
+    }
+
+    @ExceptionHandler({RuntimeException.class, IOException.class})
+    public ResponseEntity<Void> internalFailure(Exception exception) {
+        // Preserve framework 4xx handling without exposing internal failure details.
+        if (exception instanceof org.springframework.web.ErrorResponse) {
+            throw (RuntimeException) exception;
+        }
+        log.error("Resume request failed ({})", exception.getClass().getSimpleName());
+        return ResponseEntity.internalServerError().build();
     }
 }

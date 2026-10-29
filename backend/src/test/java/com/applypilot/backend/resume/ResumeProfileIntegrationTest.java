@@ -38,6 +38,7 @@ class ResumeProfileIntegrationTest {
     @Autowired JwtService jwt;
     @Autowired PlatformTransactionManager transactions;
     @Autowired EntityManager em;
+    @Autowired javax.sql.DataSource dataSource;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
     ResumeExtractionService parser;
     MockMvc mvc;
@@ -94,6 +95,40 @@ class ResumeProfileIntegrationTest {
         mvc.perform(get("/api/resumes/999999").header("Authorization",ownerToken)).andExpect(status().isNotFound());
         mvc.perform(put("/api/resumes/999999/profile").header("Authorization",ownerToken)
             .contentType("application/json").content(PROFILE)).andExpect(status().isNotFound());
+    }
+    @Test void deniesFramingAndProtectsUpload() throws Exception {
+        mvc.perform(get("/api/resumes/"+id).header("Authorization", ownerToken))
+            .andExpect(status().isOk()).andExpect(header().string("X-Frame-Options", "DENY"));
+        for (String token : new String[]{"", "Bearer invalid", ownerToken + "tampered"}) {
+            mvc.perform(multipart("/api/resumes/upload").file(pdf()).header("Authorization", token))
+                .andExpect(status().isUnauthorized()).andExpect(header().string("X-Frame-Options", "DENY"));
+        }
+        assertEquals(2, resumes.count());
+        mvc.perform(get("/h2-console/")).andExpect(status().isUnauthorized());
+    }
+    @Test void postgresColumnsUseNullableTextAndBoundedError() throws Exception {
+        try (var connection = dataSource.getConnection()) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                    connection.getMetaData().getDatabaseProductName().equals("PostgreSQL"));
+            try (var statement = connection.createStatement();
+                 var rows = statement.executeQuery("""
+                    select column_name, data_type, is_nullable, character_maximum_length
+                    from information_schema.columns
+                    where table_schema='public' and table_name='resumes'
+                      and column_name in ('parsed_profile','parsing_error') order by column_name
+                    """)) {
+                assertTrue(rows.next());
+                assertEquals("parsed_profile", rows.getString(1));
+                assertEquals("text", rows.getString(2));
+                assertEquals("YES", rows.getString(3));
+                assertTrue(rows.next());
+                assertEquals("parsing_error", rows.getString(1));
+                assertEquals("character varying", rows.getString(2));
+                assertEquals("YES", rows.getString(3));
+                assertEquals(200, rows.getInt(4));
+                assertFalse(rows.next());
+            }
+        }
     }
     @Test void rejectsMalformedAndInvalidNestedPayloads() throws Exception {
         for (String body : new String[]{"null", "{", "{\"email\":\"invalid\"}",
