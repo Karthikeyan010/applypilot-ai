@@ -64,6 +64,11 @@ public class ResumeController {
         return response(resumeService.getResume(id, user.getId()), user.getId());
     }
 
+    @GetMapping
+    public java.util.List<com.applypilot.backend.resume.dto.ResumeSummaryResponse> listResumes(Authentication authentication) {
+        return resumeService.listResumes(currentUser(authentication).getId());
+    }
+
     @PutMapping("/{id}/profile")
     public ResumeResponse replaceProfile(@PathVariable Long id,
             @Valid @RequestBody ResumeProfileResponse profile, Authentication authentication) {

@@ -61,6 +61,36 @@ class ResumeProfileIntegrationTest {
         resumes.save(Resume.builder().user(owner).fileName("second.pdf").extractedText("second").build());
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
+    @Test void listsOnlyOwnedMetadataNewestFirstAndRequiresAuthentication() throws Exception {
+        for (String token : new String[]{"", "Bearer invalid", ownerToken + "tampered"}) {
+            mvc.perform(get("/api/resumes").header("Authorization", token))
+                .andExpect(status().isUnauthorized());
+        }
+        mvc.perform(get("/api/resumes").header("Authorization", otherToken))
+            .andExpect(status().isOk()).andExpect(content().json("[]"));
+        // Equal timestamps must have a deterministic ID tie-breaker.
+        var rows = resumes.findAll();
+        var timestamp = java.time.LocalDateTime.of(2026, 1, 1, 12, 0);
+        rows.forEach(r -> r.setUploadedAt(timestamp));
+        resumes.saveAll(rows);
+        long latestId = rows.stream().mapToLong(Resume::getId).max().orElseThrow();
+        mvc.perform(get("/api/resumes").header("Authorization", ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+            .andExpect(jsonPath("$[0].id").value(latestId))
+            .andExpect(jsonPath("$[1].id").value(id))
+            .andExpect(jsonPath("$[0].hasProfile").value(false))
+            .andExpect(jsonPath("$[0].user").doesNotExist())
+            .andExpect(jsonPath("$[0].userId").doesNotExist())
+            .andExpect(jsonPath("$[0].extractedText").doesNotExist())
+            .andExpect(jsonPath("$[0].parsedProfile").doesNotExist());
+        var first = resumes.findById(id).orElseThrow();
+        first.setUploadedAt(timestamp.plusDays(1));
+        first.setParsedProfile(com.applypilot.backend.resume.dto.ResumeProfileResponse.builder().build());
+        resumes.save(first);
+        mvc.perform(get("/api/resumes").header("Authorization", ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(id))
+            .andExpect(jsonPath("$[0].hasProfile").value(true));
+    }
     @Test void replacesAndReloadsNestedProfileWithoutChangingSource() throws Exception {
         mvc.perform(get("/api/resumes/"+id).header("Authorization",ownerToken))
             .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile").isEmpty());
