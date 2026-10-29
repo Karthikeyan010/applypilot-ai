@@ -49,6 +49,15 @@ public class ResumeService {
     }
 
     @Transactional(readOnly = true)
+    public java.util.List<com.applypilot.backend.resume.dto.ResumeSummaryResponse> listResumes(Long userId) {
+        return resumeRepository.findByUserIdOrderByUploadedAtDescIdDesc(userId).stream()
+                .map(resume -> new com.applypilot.backend.resume.dto.ResumeSummaryResponse(
+                        resume.getId(), resume.getFileName(), resume.getUploadedAt(),
+                        resume.getParsedProfile() != null, resume.getParsingError()))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public Resume getResume(Long id, Long userId) {
         return resumeRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resume not found"));

@@ -29,6 +29,9 @@ public class SecurityConfig {
                                 SessionCreationPolicy.STATELESS
                         ))
                 .authorizeHttpRequests(auth -> auth
+                        // Preserve controller 4xx responses during the servlet error dispatch.
+                        // Direct requests (including /error) still require authentication.
+                        .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()

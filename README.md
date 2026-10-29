@@ -1,4 +1,11 @@
-# applypilot-ai
+# ApplyPilot AI
+
+A working React + TypeScript resume workspace backed by Spring Boot, JWT and PostgreSQL.
+
+**Start here: [Local setup and end-to-end walkthrough](docs/LOCAL-MVP.md).** Includes exact Windows/macOS/Linux commands, tests, configuration and limitations.
+
+The previous local development-status notes are preserved in [docs/PREVIOUS-DEVELOPMENT-STATUS.md](docs/PREVIOUS-DEVELOPMENT-STATUS.md) as a historical snapshot.
+
 AI-powered job application tracker and resume-job matching platform.
 
 ## Rule-based resume extraction
@@ -185,4 +192,10 @@ CI runs the same full suite for PRs against main.
 Limitations: persistence is tested with H2 rather than a live PostgreSQL instance;
 JSON fields are not indexed for queries. Concurrent full replacements use last-write
 wins; there is no edit history or optimistic locking. Rule-based parsing limitations
-above still apply. This change includes no frontend.
+above still apply. The browser frontend is documented in the local MVP guide above.
+
+
+
+## Resume library
+
+Authenticated GET /api/resumes returns metadata for only the signed-in user's CVs, ordered by uploadedAt descending and id descending. Fields: id, fileName, uploadedAt, hasProfile, parsingError. Source text, profile contents and user entities are excluded. Select an id with the existing owner-scoped GET endpoint to inspect it. See the local walkthrough above for the connected frontend.
