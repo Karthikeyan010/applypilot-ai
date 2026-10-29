@@ -33,6 +33,13 @@ public class Resume {
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
+    @Convert(converter = ResumeProfileConverter.class)
+    @Column(name = "parsed_profile", columnDefinition = "text")
+    private com.applypilot.backend.resume.dto.ResumeProfileResponse parsedProfile;
+
+    @Column(name = "parsing_error", length = 200)
+    private String parsingError;
+
     @PrePersist
     protected void onCreate(){
         this.uploadedAt = LocalDateTime.now();

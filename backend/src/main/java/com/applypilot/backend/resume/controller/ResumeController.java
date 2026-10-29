@@ -11,13 +11,13 @@ import org.springframework.http.ResponseEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/resumes")
@@ -38,9 +38,7 @@ public class ResumeController {
     @PostMapping("/upload")
     public ResponseEntity<ResumeResponse> uploadResume(@RequestParam("file")MultipartFile file, Authentication authentication) throws IOException {
 
-        String email = authentication.getName();
-
-        User user = userRepo.findByEmail(email).orElseThrow(()-> new IllegalArgumentException("Authenticated user not found"));
+        User user = currentUser(authentication);
 
         Resume resume = resumeService.uploadResume(file, user);
 
@@ -52,20 +50,42 @@ public class ResumeController {
                 throw new IllegalStateException("Parser returned no profile");
             }
         } catch (RuntimeException exception) {
-            log.warn("Profile extraction failed for persisted resume {}", resume.getId(), exception);
+            log.warn("Profile extraction failed for persisted resume {}", resume.getId());
             parsingError = "Resume saved, but structured profile extraction failed.";
         }
 
-        ResumeResponse resumeResponse = ResumeResponse.builder()
-                .id(resume.getId())
-                .userId(user.getId())
-                .fileName(resume.getFileName())
-                .extractedText(resume.getExtractedText())
-                .parsedProfile(parsedProfile)
-                .parsingError(parsingError)
-                .uploadedAt(resume.getUploadedAt())
-                .build();
+        resume = resumeService.saveParsedProfile(resume.getId(), user.getId(), parsedProfile, parsingError);
+        return ResponseEntity.ok(response(resume, user.getId()));
+    }
 
-        return ResponseEntity.ok(resumeResponse);
+    @GetMapping("/{id}")
+    public ResumeResponse getResume(@PathVariable Long id, Authentication authentication) {
+        User user = currentUser(authentication);
+        return response(resumeService.getResume(id, user.getId()), user.getId());
+    }
+
+    @PutMapping("/{id}/profile")
+    public ResumeResponse replaceProfile(@PathVariable Long id,
+            @Valid @RequestBody ResumeProfileResponse profile, Authentication authentication) {
+        User user = currentUser(authentication);
+        return response(resumeService.saveParsedProfile(id, user.getId(), profile, null), user.getId());
+    }
+
+    private User currentUser(Authentication authentication) {
+        if (authentication == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
+        return userRepo.findByEmail(authentication.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+    }
+
+    private ResumeResponse response(Resume resume, Long userId) {
+        return ResumeResponse.builder()
+                .id(resume.getId()).userId(userId).fileName(resume.getFileName())
+                .extractedText(resume.getExtractedText()).parsedProfile(resume.getParsedProfile())
+                .parsingError(resume.getParsingError()).uploadedAt(resume.getUploadedAt()).build();
+    }
+
+    @ExceptionHandler({IllegalArgumentException.class, IOException.class})
+    public ResponseEntity<Void> invalidUpload(Exception exception) {
+        return ResponseEntity.badRequest().build();
     }
 }

@@ -10,6 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import com.applypilot.backend.resume.dto.ResumeProfileResponse;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 @Service
 public class ResumeService {
@@ -34,6 +38,20 @@ public class ResumeService {
         return resumeRepository.save(resume);
 
 
+    }
+
+    @Transactional
+    public Resume saveParsedProfile(Long id, Long userId, ResumeProfileResponse profile, String error) {
+        Resume resume = getResume(id, userId);
+        resume.setParsedProfile(profile);
+        resume.setParsingError(error);
+        return resumeRepository.save(resume);
+    }
+
+    @Transactional(readOnly = true)
+    public Resume getResume(Long id, Long userId) {
+        return resumeRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resume not found"));
     }
 
     private String extractText(MultipartFile file) throws IOException {

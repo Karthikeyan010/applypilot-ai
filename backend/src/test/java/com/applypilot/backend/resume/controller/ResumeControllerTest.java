@@ -35,6 +35,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class ResumeControllerTest {
+    private Resume savedResume;
     private ResumeRepository resumes;
     private ResumeExtractionService parser;
     private MockMvc mvc;
@@ -46,10 +47,12 @@ class ResumeControllerTest {
         UserRepo users = mock(UserRepo.class);
         User user = User.builder().id(42L).email("jordan@example.com").build();
         when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(resumes.findByIdAndUserId(7L, 42L)).thenAnswer(invocation -> Optional.of(savedResume));
         when(resumes.save(any(Resume.class))).thenAnswer(invocation -> {
             Resume saved = invocation.getArgument(0);
             saved.setId(7L);
             saved.setUploadedAt(LocalDateTime.of(2026, 1, 1, 12, 0));
+            savedResume = saved;
             return saved;
         });
         mvc = MockMvcBuilders.standaloneSetup(new ResumeController(new ResumeService(resumes), parser, users)).build();
@@ -74,7 +77,7 @@ class ResumeControllerTest {
                 .andExpect(jsonPath("$.parsingError").isEmpty());
 
         ArgumentCaptor<Resume> saved = ArgumentCaptor.forClass(Resume.class);
-        verify(resumes).save(saved.capture());
+        verify(resumes, times(2)).save(saved.capture());
         assertEquals(source(), saved.getValue().getExtractedText());
         var order = inOrder(resumes, parser);
         order.verify(resumes).save(any(Resume.class));
@@ -101,8 +104,9 @@ class ResumeControllerTest {
                 .andExpect(jsonPath("$.extractedText").value(source()))
                 .andExpect(jsonPath("$.parsedProfile").isEmpty())
                 .andExpect(jsonPath("$.parsingError").value("Resume saved, but structured profile extraction failed."));
-        verify(resumes, times(1)).save(any(Resume.class));
+        verify(resumes, times(2)).save(any(Resume.class));
         verify(parser, times(1)).extract(source());
+        verify(resumes).findByIdAndUserId(7L, 42L);
         verifyNoMoreInteractions(resumes, parser);
     }
 
