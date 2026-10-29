@@ -10,6 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import com.applypilot.backend.resume.dto.ResumeProfileResponse;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 @Service
 public class ResumeService {
@@ -36,9 +40,30 @@ public class ResumeService {
 
     }
 
+    @Transactional
+    public Resume saveParsedProfile(Long id, Long userId, ResumeProfileResponse profile, String error) {
+        Resume resume = getResume(id, userId);
+        resume.setParsedProfile(profile);
+        resume.setParsingError(error);
+        return resumeRepository.save(resume);
+    }
+
+    @Transactional(readOnly = true)
+    public Resume getResume(Long id, Long userId) {
+        return resumeRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resume not found"));
+    }
+
     private String extractText(MultipartFile file) throws IOException {
 
-        try(PDDocument document = Loader.loadPDF(file.getBytes())){
+        byte[] bytes = file.getBytes();
+        PDDocument loaded;
+        try {
+            loaded = Loader.loadPDF(bytes);
+        } catch (IOException invalidPdf) {
+            throw new InvalidResumeUploadException("Resume must be a readable, unencrypted PDF");
+        }
+        try(PDDocument document = loaded){
 
             PDFTextStripper textStripper = new PDFTextStripper();
 
@@ -49,11 +74,15 @@ public class ResumeService {
     private void validateFile(MultipartFile file) {
 
         if(file == null || file.isEmpty()){
-            throw new IllegalArgumentException("Resume file cannot be empty");
+            throw new InvalidResumeUploadException("Resume file cannot be empty");
         }
 
         if(!"application/pdf".equalsIgnoreCase(file.getContentType())){
-            throw new IllegalArgumentException("Only PDF resumes are supported");
+            throw new InvalidResumeUploadException("Only PDF resumes are supported");
+        }
+        if (file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                || file.getOriginalFilename().length() > 255) {
+            throw new InvalidResumeUploadException("Invalid resume filename");
         }
     }
 }

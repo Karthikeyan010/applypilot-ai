@@ -108,3 +108,81 @@ Backend verification (from `backend` on Windows): `./mvnw.cmd test`.
 The Spring Boot context test uses a test-only H2 database and an explicit test JWT
 secret. Surefire starts Mockito's agent explicitly to avoid dynamic agent
 attachment; no external database or AI service is required for the tests.
+
+## Saved resume profiles
+
+Uploads now persist the parsed profile as JSON in nullable SQL `TEXT` column
+`resumes.parsed_profile`, using a JPA converter and the existing Jackson library.
+`resumes.parsing_error` stores the safe parsing-failure message. No new dependencies
+or external AI services are required. The upload response shape is unchanged.
+
+All resume routes require `Authorization: Bearer <jwt>`. Ownership is derived from
+the authenticated JWT subject and enforced in the repository query. Both a missing
+resume and another user's resume return **404**. Missing, expired or invalid JWTs
+return **401**; no role-based 403 is needed for these owner-only endpoints.
+
+- `GET /api/resumes/{id}` returns the same envelope as upload, including the latest
+  `parsedProfile`, immutable `extractedText`, metadata and `parsingError`.
+- `PUT /api/resumes/{id}/profile` accepts the profile object directly (not the
+  envelope) and performs a **full replacement**, returning the updated envelope.
+  Omitted scalar fields become null; omitted top-level lists become empty lists.
+  Explicit null lists, empty lists and null/empty scalar values are supported.
+  A null request body is rejected. Saving a corrected profile clears `parsingError`.
+  Neither ownership, filename, upload time nor `extractedText` can be edited.
+  `originalText` and `unmatchedText` inside the profile are editable annotations;
+  the exact PDF source remains available as `extractedText`.
+- Invalid JSON, wrong field types, invalid email and validation failures return
+  **400**. String limits: 1,000 characters for metadata, 200,000 for summary/source
+  text, 10,000 per list string. Lists allow at most 500 strings or 100 nested
+  entries. Null list elements are rejected; nested validation is recursive.
+  Dates remain free-form strings, as in the parser contract. Both `jobTitle` and
+  legacy `jobTittle` remain supported independently.
+
+Example (save this object as `profile.json`; it replaces all previous fields):
+
+```json
+{
+  "fullName": "Jordan Lee",
+  "email": "jordan@example.com",
+  "summary": "Backend engineer",
+  "skills": ["Java", "SQL"],
+  "education": [{"institution": "Example University", "degree": "BSc"}],
+  "experience": [{"company": "Example Inc", "jobTitle": "Engineer", "responsibilities": ["Built APIs"]}],
+  "projects": [{"name": "ApplyPilot", "technologies": ["Java"], "description": ["Resume tools"]}],
+  "originalText": null,
+  "unmatchedText": "Awards"
+}
+```
+
+```sh
+curl -H "Authorization: Bearer $JWT" http://localhost:8080/api/resumes/1
+curl -X PUT -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  --data-binary @profile.json http://localhost:8080/api/resumes/1/profile
+```
+
+### Migration and verification
+
+The existing `spring.jpa.hibernate.ddl-auto=update` configuration adds these nullable
+columns without deleting rows. For environments managing schema changes explicitly,
+apply this additive PostgreSQL SQL before deploying (no backfill required):
+
+```sql
+ALTER TABLE resumes ADD COLUMN IF NOT EXISTS parsed_profile TEXT;
+ALTER TABLE resumes ADD COLUMN IF NOT EXISTS parsing_error VARCHAR(200);
+```
+
+Existing rows return `parsedProfile: null` and `parsingError: null`; they can be
+edited immediately. They are not automatically re-parsed. Parsing failures on new
+uploads retain text and metadata and the safe error message across later GETs.
+A database write failure is an API failure, not a successful profile save.
+
+Run `cd backend && ./mvnw clean test` (Windows: `mvnw.cmd clean test`) with Java 21.
+Tests use H2, real JWT authentication, PDFBox and JPA conversion. Integration tests
+verify upload/reload, parse-failure recovery, nested replacement, source preservation,
+multiple resumes, legacy rows, ownership, invalid tokens and malformed input.
+CI runs the same full suite for PRs against main.
+
+Limitations: persistence is tested with H2 rather than a live PostgreSQL instance;
+JSON fields are not indexed for queries. Concurrent full replacements use last-write
+wins; there is no edit history or optimistic locking. Rule-based parsing limitations
+above still apply. This change includes no frontend.

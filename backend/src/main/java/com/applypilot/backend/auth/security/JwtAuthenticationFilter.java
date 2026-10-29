@@ -54,8 +54,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
             }
-        }catch (Exception ignored){
-
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException invalidToken) {
+            SecurityContextHolder.clearContext();
+        } catch (RuntimeException internalFailure) {
+            SecurityContextHolder.clearContext();
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            return;
         }
 
         filterChain.doFilter(request,response);

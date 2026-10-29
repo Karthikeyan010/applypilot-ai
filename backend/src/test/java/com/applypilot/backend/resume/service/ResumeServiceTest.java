@@ -76,4 +76,31 @@ public class ResumeServiceTest {
         assertThrows(IllegalArgumentException.class, () -> resumeService.uploadResume(null, new User()));
         verifyNoInteractions(resumeRepository);
     }
+
+    @Test
+    void shouldReplaceProfileWithoutChangingSource() {
+        var resume = com.applypilot.backend.resume.entity.Resume.builder()
+                .id(7L).fileName("cv.pdf").extractedText("source").parsingError("old failure").build();
+        var profile = com.applypilot.backend.resume.dto.ResumeProfileResponse.builder().summary("Edited").build();
+        org.mockito.Mockito.when(resumeRepository.findByIdAndUserId(7L, 42L))
+                .thenReturn(java.util.Optional.of(resume));
+        org.mockito.Mockito.when(resumeRepository.save(resume)).thenReturn(resume);
+        var result = resumeService.saveParsedProfile(7L, 42L, profile, null);
+        org.junit.jupiter.api.Assertions.assertSame(profile, result.getParsedProfile());
+        org.junit.jupiter.api.Assertions.assertNull(result.getParsingError());
+        assertEquals("source", result.getExtractedText());
+        assertEquals("cv.pdf", result.getFileName());
+        org.mockito.Mockito.verify(resumeRepository).save(resume);
+    }
+
+    @Test
+    void shouldNotWriteWhenOwnerScopedLookupFails() {
+        org.mockito.Mockito.when(resumeRepository.findByIdAndUserId(7L, 99L))
+                .thenReturn(java.util.Optional.empty());
+        var exception = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> resumeService.saveParsedProfile(7L, 99L,
+                        com.applypilot.backend.resume.dto.ResumeProfileResponse.builder().build(), null));
+        assertEquals(org.springframework.http.HttpStatus.NOT_FOUND, exception.getStatusCode());
+        org.mockito.Mockito.verify(resumeRepository, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+    }
 }
