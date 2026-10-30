@@ -3,7 +3,7 @@ package com.applypilot.backend.resume;
 import com.applypilot.backend.auth.security.JwtService;
 import com.applypilot.backend.resume.entity.Resume;
 import com.applypilot.backend.resume.repository.ResumeRepository;
-import com.applypilot.backend.resume.service.ResumeExtractionService;
+import com.applypilot.backend.resume.parsing.*;
 import com.applypilot.backend.user.entity.User;
 import com.applypilot.backend.user.repository.UserRepo;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -39,8 +39,8 @@ class ResumeProfileIntegrationTest {
     @Autowired PlatformTransactionManager transactions;
     @Autowired EntityManager em;
     @Autowired javax.sql.DataSource dataSource;
-    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
-    ResumeExtractionService parser;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    ResumeParserService parser;
     MockMvc mvc;
     String ownerToken, otherToken;
     Long id;
@@ -53,6 +53,9 @@ class ResumeProfileIntegrationTest {
         """;
     @BeforeEach void setup() {
         org.mockito.Mockito.reset(parser);
+        org.mockito.Mockito.when(parser.parse(org.mockito.ArgumentMatchers.anyString())).thenAnswer(call ->
+            new ResumeParsingResult(com.applypilot.backend.resume.dto.ResumeProfileResponse.builder()
+                .fullName("Jordan Lee").originalText(call.getArgument(0)).build(), java.util.List.of(), "ollama", "test"));
         resumes.deleteAll(); users.deleteAll();
         User owner = users.save(User.builder().email("owner@example.com").fullName("Owner").passwordHash("unused").build());
         User other = users.save(User.builder().email("other@example.com").fullName("Other").passwordHash("unused").build());
@@ -174,25 +177,65 @@ class ResumeProfileIntegrationTest {
 
     @Test void uploadPersistsParsedProfileAcrossRequests() throws Exception {
         String json = mvc.perform(multipart("/api/resumes/upload").file(pdf()).header("Authorization",ownerToken))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.fullName").value("Jordan Lee"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.extractionDraft.profile.fullName").value("Jordan Lee"))
             .andReturn().getResponse().getContentAsString();
         long uploadedId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json).get("id").asLong();
         mvc.perform(get("/api/resumes/"+uploadedId).header("Authorization",ownerToken))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.fullName").value("Jordan Lee"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.extractionDraft.profile.fullName").value("Jordan Lee"))
             .andExpect(jsonPath("$.extractedText").value(source()));
     }
     @Test void parserFailureRemainsSavedAndCanBeCorrected() throws Exception {
         org.mockito.Mockito.doThrow(new IllegalStateException("private detail"))
-            .when(parser).extract(org.mockito.ArgumentMatchers.anyString());
+            .when(parser).parse(org.mockito.ArgumentMatchers.anyString());
         String json = mvc.perform(multipart("/api/resumes/upload").file(pdf()).header("Authorization",ownerToken))
             .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile").isEmpty())
             .andReturn().getResponse().getContentAsString();
         long uploadedId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json).get("id").asLong();
         mvc.perform(get("/api/resumes/"+uploadedId).header("Authorization",ownerToken))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.parsingError").value("Resume saved, but structured profile extraction failed."));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsingError").value("AI extraction failed. Retry extraction or enter your profile manually. Your saved profile is unchanged."));
         mvc.perform(put("/api/resumes/"+uploadedId+"/profile").header("Authorization",ownerToken)
             .contentType("application/json").content(PROFILE)).andExpect(status().isOk())
             .andExpect(jsonPath("$.parsingError").isEmpty()).andExpect(jsonPath("$.extractedText").value(source()));
+    }
+    @Test void retryDraftNeverOverwritesVerifiedProfileEvenAfterFailure() throws Exception {
+        mvc.perform(put("/api/resumes/"+id+"/profile").header("Authorization",ownerToken)
+            .contentType("application/json").content(PROFILE)).andExpect(status().isOk());
+        mvc.perform(post("/api/resumes/"+id+"/extraction").header("Authorization",ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.fullName").value("Corrected Name"))
+            .andExpect(jsonPath("$.extractionDraft.profile.fullName").value("Jordan Lee"))
+            .andExpect(jsonPath("$.profileConfirmedAt").isNotEmpty());
+        mvc.perform(get("/api/resumes/"+id).header("Authorization",ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.experience[0].jobTittle").value("Engineer"))
+            .andExpect(jsonPath("$.parsedProfile.originalText").value("editable source"))
+            .andExpect(jsonPath("$.extractionDraft.provider").value("ollama"));
+        org.mockito.Mockito.doThrow(new ResumeParsingException("Ollama unavailable. Retry or enter manually."))
+            .when(parser).parse(org.mockito.ArgumentMatchers.anyString());
+        mvc.perform(post("/api/resumes/"+id+"/extraction").header("Authorization",ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.fullName").value("Corrected Name"))
+            .andExpect(jsonPath("$.parsedProfile.projects[0].description[0]").value("Useful"))
+            .andExpect(jsonPath("$.extractionDraft").isEmpty());
+        mvc.perform(put("/api/resumes/"+id+"/profile").header("Authorization",ownerToken)
+            .contentType("application/json").content(PROFILE)).andExpect(status().isOk())
+            .andExpect(jsonPath("$.extractionDraft").isEmpty()).andExpect(jsonPath("$.parsingError").isEmpty());
+    }
+    @Test void extractionAndManualRoutesAreOwnerScopedAndHaveNoLegacyFallbackBean() throws Exception {
+        assertTrue(context.getBeansOfType(com.applypilot.backend.resume.service.ResumeExtractionService.class).isEmpty());
+        for (String token : new String[]{"", "Bearer invalid", otherToken}) {
+            mvc.perform(post("/api/resumes/"+id+"/extraction").header("Authorization", token))
+                .andExpect(status().is(token.equals(otherToken)?404:401));
+        }
+        org.mockito.Mockito.verifyNoInteractions(parser);
+        mvc.perform(post("/api/resumes/manual").contentType("application/json").content("{\"name\":\"Manual\"}"))
+            .andExpect(status().isUnauthorized());
+        String result = mvc.perform(post("/api/resumes/manual").header("Authorization",ownerToken)
+            .contentType("application/json").content("{\"name\":\"Manual career profile\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.extractedText").value(""))
+            .andReturn().getResponse().getContentAsString();
+        long manualId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result).path("id").asLong();
+        mvc.perform(put("/api/resumes/"+manualId+"/profile").header("Authorization",ownerToken)
+            .contentType("application/json").content(PROFILE)).andExpect(status().isOk());
+        mvc.perform(get("/api/resumes/"+manualId).header("Authorization",ownerToken))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile.projects[0].description[0]").value("Useful"));
     }
     private String source() {
         return "Jordan Lee" + System.lineSeparator() + "Experience" + System.lineSeparator()

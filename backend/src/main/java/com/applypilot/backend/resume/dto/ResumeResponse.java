@@ -15,5 +15,7 @@ public class ResumeResponse {
     private String extractedText;
     private ResumeProfileResponse parsedProfile;
     private String parsingError;
+    private LocalDateTime profileConfirmedAt;
+    private com.applypilot.backend.resume.parsing.ResumeParsingResult extractionDraft;
     private LocalDateTime uploadedAt;
 }

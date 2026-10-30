@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-@Service
+// Legacy regression reference only. Not a Spring bean and never used as an AI fallback.
 public class RuleBasedResumeExtractionService implements ResumeExtractionService {
 
     private static final Pattern DATE_RANGE_PATTERN = Pattern.compile(

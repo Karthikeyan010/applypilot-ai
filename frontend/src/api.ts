@@ -12,7 +12,15 @@ export type Profile = {
   experience?: Entry[] | null;
   projects?: Entry[] | null;
 };
+export type ExtractionDraft = {
+  profile: Profile;
+  warnings: { field: string; message: string }[];
+  provider: string;
+  model: string;
+};
 export type Resume = {
+  profileConfirmedAt?: string | null;
+  extractionDraft?: ExtractionDraft | null;
   id: number;
   fileName: string;
   uploadedAt: string;
@@ -23,7 +31,7 @@ export type Resume = {
 export type Summary = Pick<
   Resume,
   "id" | "fileName" | "uploadedAt" | "parsingError"
-> & { hasProfile: boolean };
+> & { hasProfile: boolean; hasDraft?: boolean };
 export type Session = {
   token: string;
   fullName: string;

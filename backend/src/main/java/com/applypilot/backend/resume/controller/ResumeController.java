@@ -3,7 +3,9 @@ package com.applypilot.backend.resume.controller;
 import com.applypilot.backend.resume.dto.ResumeResponse;
 import com.applypilot.backend.resume.dto.ResumeProfileResponse;
 import com.applypilot.backend.resume.entity.Resume;
-import com.applypilot.backend.resume.service.ResumeExtractionService;
+import com.applypilot.backend.resume.parsing.ResumeParserService;
+import com.applypilot.backend.resume.parsing.ResumeParsingResult;
+import com.applypilot.backend.resume.parsing.ResumeParsingException;
 import com.applypilot.backend.resume.service.ResumeService;
 import com.applypilot.backend.user.entity.User;
 import com.applypilot.backend.user.repository.UserRepo;
@@ -26,12 +28,12 @@ public class ResumeController {
     private static final Logger log = LoggerFactory.getLogger(ResumeController.class);
 
     private final ResumeService resumeService;
-    private final ResumeExtractionService resumeExtractionService;
+    private final ResumeParserService parser;
     private final UserRepo userRepo;
 
-    public ResumeController(ResumeService resumeService, ResumeExtractionService resumeExtractionService, UserRepo userRepo) {
+    public ResumeController(ResumeService resumeService, ResumeParserService parser, UserRepo userRepo) {
         this.resumeService = resumeService;
-        this.resumeExtractionService = resumeExtractionService;
+        this.parser = parser;
         this.userRepo = userRepo;
     }
 
@@ -42,20 +44,41 @@ public class ResumeController {
 
         Resume resume = resumeService.uploadResume(file, user);
 
-        ResumeProfileResponse parsedProfile = null;
+        return ResponseEntity.ok(extractDraft(resume, user));
+    }
+
+    @PostMapping("/{id}/extraction")
+    public ResumeResponse retryExtraction(@PathVariable Long id, Authentication authentication) {
+        User user = currentUser(authentication);
+        // Ownership is checked BEFORE calling any inference provider.
+        return extractDraft(resumeService.getResume(id, user.getId()), user);
+    }
+
+    @PostMapping("/manual")
+    public ResumeResponse createManual(@Valid @RequestBody ManualProfileRequest request, Authentication authentication) {
+        User user = currentUser(authentication);
+        return response(resumeService.createManual(request.name(), user), user.getId());
+    }
+
+    public record ManualProfileRequest(@jakarta.validation.constraints.NotBlank
+                                      @jakarta.validation.constraints.Size(max = 255) String name) {}
+
+    private ResumeResponse extractDraft(Resume resume, User user) {
+        ResumeParsingResult draft = null;
         String parsingError = null;
         try {
-            parsedProfile = resumeExtractionService.extract(resume.getExtractedText());
-            if (parsedProfile == null) {
+            draft = parser.parse(resume.getExtractedText());
+            if (draft == null || draft.profile() == null) {
                 throw new IllegalStateException("Parser returned no profile");
             }
+        } catch (ResumeParsingException exception) {
+            parsingError = exception.getMessage();
         } catch (RuntimeException exception) {
             log.warn("Profile extraction failed for persisted resume {}", resume.getId());
-            parsingError = "Resume saved, but structured profile extraction failed.";
+            parsingError = "AI extraction failed. Retry extraction or enter your profile manually. Your saved profile is unchanged.";
         }
-
-        resume = resumeService.saveParsedProfile(resume.getId(), user.getId(), parsedProfile, parsingError);
-        return ResponseEntity.ok(response(resume, user.getId()));
+        resume = resumeService.saveExtractionDraft(resume.getId(), user.getId(), draft, parsingError);
+        return response(resume, user.getId());
     }
 
     @GetMapping("/{id}")
@@ -86,6 +109,7 @@ public class ResumeController {
         return ResumeResponse.builder()
                 .id(resume.getId()).userId(userId).fileName(resume.getFileName())
                 .extractedText(resume.getExtractedText()).parsedProfile(resume.getParsedProfile())
+                .extractionDraft(resume.getExtractionDraft()).profileConfirmedAt(resume.getProfileConfirmedAt())
                 .parsingError(resume.getParsingError()).uploadedAt(resume.getUploadedAt()).build();
     }
 

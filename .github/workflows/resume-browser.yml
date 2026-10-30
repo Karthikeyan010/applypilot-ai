@@ -1,0 +1,58 @@
+name: Resume browser contract
+on:
+  pull_request:
+    branches: [main, feat/frontend-mvp]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Start real backend with disposable H2 and synthetic provider endpoint
+        working-directory: backend
+        run: |
+          ./mvnw org.springframework.boot:spring-boot-maven-plugin:4.0.6:run \
+            -Dspring-boot.run.useTestClasspath=true \
+            '-Dspring-boot.run.arguments=--spring.datasource.url=jdbc:h2:mem:browser --spring.datasource.driver-class-name=org.h2.Driver --spring.datasource.username=sa --spring.datasource.password= --spring.jpa.database-platform=org.hibernate.dialect.H2Dialect --app.jwt.secret=browser-test-secret-at-least-32-characters-long --spring.jpa.show-sql=false --app.ollama.base-url=http://127.0.0.1:11999 --app.ollama.model=synthetic-model --app.ollama.timeout-seconds=5' > /tmp/resume-backend.log 2>&1 &
+      - name: Start frontend
+        working-directory: frontend
+        run: npm run dev > /tmp/resume-frontend.log 2>&1 &
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 90); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/resumes)" = "401" ] && curl -fsS http://127.0.0.1:5173/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/resume-backend.log /tmp/resume-frontend.log
+          exit 1
+      - name: Browser contract (synthetic model responses; real application APIs)
+        working-directory: frontend
+        env:
+          OLLAMA_TEST_FIXTURE: '1'
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resume-browser-screenshots
+          path: |
+            docs/screenshots/issue18/
+            frontend/test-results/

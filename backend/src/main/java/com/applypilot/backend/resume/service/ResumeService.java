@@ -44,8 +44,23 @@ public class ResumeService {
     public Resume saveParsedProfile(Long id, Long userId, ResumeProfileResponse profile, String error) {
         Resume resume = getResume(id, userId);
         resume.setParsedProfile(profile);
+        resume.setProfileConfirmedAt(java.time.LocalDateTime.now());
+        resume.setExtractionDraft(null);
         resume.setParsingError(error);
         return resumeRepository.save(resume);
+    }
+
+    public Resume createManual(String name, User user) {
+        return resumeRepository.save(Resume.builder().user(user).fileName(name).extractedText("").build());
+    }
+
+    @Transactional
+    public Resume saveExtractionDraft(Long id, Long userId,
+            com.applypilot.backend.resume.parsing.ResumeParsingResult draft, String error) {
+        if (resumeRepository.updateDraft(id, userId, draft, error) != 1) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resume not found");
+        }
+        return getResume(id, userId);
     }
 
     @Transactional(readOnly = true)
@@ -53,7 +68,7 @@ public class ResumeService {
         return resumeRepository.findByUserIdOrderByUploadedAtDescIdDesc(userId).stream()
                 .map(resume -> new com.applypilot.backend.resume.dto.ResumeSummaryResponse(
                         resume.getId(), resume.getFileName(), resume.getUploadedAt(),
-                        resume.getParsedProfile() != null, resume.getParsingError()))
+                        resume.getParsedProfile() != null, resume.getExtractionDraft() != null, resume.getParsingError()))
                 .toList();
     }
 

@@ -1,5 +1,7 @@
 # ApplyPilot AI
 
+**Issue #18 update:** [AI-first Ollama setup, draft confirmation, editor walkthrough and Tika evaluation](docs/AI-FIRST-RESUMES.md). This supersedes the historical rule-based processing descriptions below.
+
 A working React + TypeScript resume workspace backed by Spring Boot, JWT and PostgreSQL.
 
 **Start here: [Local setup and end-to-end walkthrough](docs/LOCAL-MVP.md).** Includes exact Windows/macOS/Linux commands, tests, configuration and limitations.

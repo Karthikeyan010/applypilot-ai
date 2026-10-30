@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import com.applypilot.backend.resume.controller.ResumeController;
-import com.applypilot.backend.resume.service.ResumeExtractionService;
+import com.applypilot.backend.resume.parsing.ResumeParserService;
 import com.applypilot.backend.resume.repository.ResumeRepository;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -22,13 +22,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class BackendApplicationTests {
 
     @Autowired private ResumeController resumeController;
-    @Autowired private ResumeExtractionService extractionService;
+    @Autowired private ResumeParserService extractionService;
     @Autowired private ResumeRepository resumeRepository;
 
 	@Test
 	void contextLoads() {
 		assertNotNull(resumeController);
-        assertNotNull(extractionService.extract(""));
+        assertNotNull(extractionService);
+        org.junit.jupiter.api.Assertions.assertThrows(com.applypilot.backend.resume.parsing.ResumeParsingException.class, () -> extractionService.parse(""));
         assertEquals(0, resumeRepository.count());
 	}
 
