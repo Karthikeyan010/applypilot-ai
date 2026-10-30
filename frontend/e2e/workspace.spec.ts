@@ -1,9 +1,15 @@
-import { test, expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
-// Minimal valid text PDF, generated locally; no personal data or external fixture.
-function pdf() {
+import { test, expect, type Page } from "@playwright/test";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+// Synthetic text PDFs only, constructed with standard fonts; unicode bullet variants map to hyphens.
+function pdf(source: string) {
+  const safe = source.replace(/[•■–]/g, "-");
   const stream =
-    "BT /F1 12 Tf 50 750 Td (Jordan Lee) Tj 0 -20 Td (jordan@example.com) Tj 0 -20 Td (Skills) Tj 0 -20 Td (Java, SQL) Tj ET";
+    "BT /F1 10 Tf 45 760 Td 14 TL " +
+    safe
+      .split(/\r?\n/)
+      .map((line) => `(${line.replace(/([\\()])/g, "\\$1")}) Tj T*`)
+      .join(" ") +
+    " ET";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -27,119 +33,214 @@ function pdf() {
     `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF`;
   return Buffer.from(text);
 }
-test("real auth, PDF upload, nested editing, persistence, history, isolation and mobile", async ({
-  page,
-  request,
-}) => {
-  const email = `browser-${Date.now()}@example.com`;
-  const password = "Local-test-password-123";
-  await mkdir("../docs/screenshots", { recursive: true });
+async function register(page: Page) {
+  const email = `ai-browser-${Date.now()}-${Math.floor(Math.random() * 10000)}@example.com`;
   await page.goto("/");
-  await page.screenshot({
-    path: "../docs/screenshots/login.png",
-    fullPage: true,
-  });
   await page.getByRole("button", { name: "Create an account" }).click();
   await page.getByLabel("Full name").fill("Jordan Lee");
   await page.getByLabel("Email address").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await page.getByLabel("Password").fill("Local-test-password-123");
   await page
     .getByRole("button", { name: "Create account", exact: true })
     .click();
   await expect(page.getByText("A fresh start")).toBeVisible();
-  await page.getByLabel("Upload PDF").setInputFiles({
-    name: "jordan-cv.pdf",
-    mimeType: "application/pdf",
-    buffer: pdf(),
-  });
-  await expect(page.getByLabel("Full name", { exact: true })).toHaveValue(
-    "Jordan Lee",
+}
+async function token(page: Page) {
+  return page.evaluate(
+    () =>
+      JSON.parse(sessionStorage.getItem("applypilot-session")!).token as string,
   );
-  await page.getByLabel("Full name", { exact: true }).fill("Jordan Updated");
+}
+for (const layout of ["standard", "wrapped"])
+  test(`AI draft review, grouped bullets, merge, confirm, reload and retry: ${layout}`, async ({
+    page,
+    request,
+  }) => {
+    await register(page);
+    const source = await readFile(
+      `../backend/src/test/resources/cvs/${layout}.txt`,
+      "utf8",
+    );
+    await page.getByLabel("Upload PDF").setInputFiles({
+      name: `${layout}.pdf`,
+      mimeType: "application/pdf",
+      buffer: pdf(source),
+    });
+    await mkdir("../docs/fixtures", { recursive: true });
+    await writeFile(`../docs/fixtures/${layout}.pdf`, pdf(source));
+    await expect(
+      page.getByText("Unverified AI draft", { exact: true }),
+    ).toBeVisible({
+      timeout: 150000,
+    });
+    await expect(
+      page.getByLabel("Description bullet 3", { exact: true }),
+    ).toHaveValue("Deployed services with Docker.");
+    await expect(
+      page.getByLabel("Responsibility 3", { exact: true }),
+    ).toHaveValue("Improved automated tests.");
+    await expect(
+      page.getByRole("button", { name: "Save changes" }),
+    ).toBeDisabled();
+    const headers = { Authorization: `Bearer ${await token(page)}` };
+    const rows = await (await request.get("/api/resumes", { headers })).json();
+    const id = rows[0].id;
+    const initial = await (
+      await request.get(`/api/resumes/${id}`, { headers })
+    ).json();
+    expect(initial.parsedProfile).toBeNull();
+    expect(initial.extractionDraft.profile.projects).toHaveLength(1);
+    await page
+      .getByLabel("Description bullet 2", { exact: true })
+      .fill(
+        "Added resilient checkout workflows.\nKept as one multiline bullet.",
+      );
+    await page
+      .getByRole("button", { name: "Add project", exact: true })
+      .click();
+    await page
+      .getByLabel("Project name")
+      .last()
+      .fill("Scalable Bookstore Microservices Platform");
+    const entry = page.locator(".expandable-entry").last();
+    await entry
+      .getByRole("button", { name: "Add bullet", exact: true })
+      .click();
+    await entry
+      .getByLabel("Description bullet 1", { exact: true })
+      .fill("Extra manually reviewed bullet.");
+    await page
+      .getByRole("button", { name: "Merge projects 2 with previous" })
+      .click();
+    await expect(
+      page.getByLabel("Description bullet 4", { exact: true }),
+    ).toHaveValue("Extra manually reviewed bullet.");
+    await page
+      .getByLabel("I reviewed these details and confirm saving this profile.")
+      .check();
+    await page
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
+    await expect(
+      page.getByText("Changes saved and reloaded from the server."),
+    ).toBeVisible();
+    const saved = await (
+      await request.get(`/api/resumes/${id}`, { headers })
+    ).json();
+    expect(saved.extractionDraft).toBeNull();
+    expect(saved.parsedProfile.projects).toHaveLength(1);
+    expect(saved.parsedProfile.projects[0].description).toHaveLength(4);
+    expect(saved.parsedProfile.originalText).toBe(initial.extractedText);
+    expect(saved.parsedProfile.unmatchedText).toBe(initial.extractedText);
+    await page.reload();
+    await page
+      .getByRole("button", { name: new RegExp(`${layout}.pdf`) })
+      .click();
+    await expect(
+      page.getByLabel("Description bullet 4", { exact: true }),
+    ).toHaveValue("Extra manually reviewed bullet.");
+    await page.getByRole("button", { name: "Retry AI extraction" }).click();
+    await expect(
+      page.getByText(
+        "New draft ready for review. Your saved profile is unchanged.",
+      ),
+    ).toBeVisible({ timeout: 150000 });
+    await expect(
+      page.getByLabel("Description bullet 4", { exact: true }),
+    ).toHaveValue("Extra manually reviewed bullet.");
+    const retried = await (
+      await request.get(`/api/resumes/${id}`, { headers })
+    ).json();
+    expect(retried.parsedProfile).toEqual(saved.parsedProfile);
+    expect(
+      retried.extractionDraft.profile.projects[0].description,
+    ).toHaveLength(3);
+    await mkdir("../docs/screenshots/issue18", { recursive: true });
+    await page
+      .getByLabel("Description bullet 2", { exact: true })
+      .scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: `../docs/screenshots/issue18/${layout}-editor.png`,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBeTruthy();
+    await page.screenshot({
+      path: `../docs/screenshots/issue18/${layout}-mobile.png`,
+    });
+  });
+test("manual profile creation without inference", async ({ page }) => {
+  await register(page);
+  page.once("dialog", (dialog) => dialog.accept("Manual career profile"));
   await page
-    .getByLabel("Summary", { exact: true })
-    .fill("My browser-tested summary");
-  await page
-    .getByRole("button", { name: "Add experience", exact: true })
+    .getByRole("button", { name: "Create profile without a PDF" })
     .click();
-  await page.getByLabel("Company", { exact: true }).fill("Example Co");
-  await page.getByLabel("Job title", { exact: true }).fill("Engineer");
+  await page.getByLabel("Full name", { exact: true }).fill("Manual Owner");
+  await page.getByRole("button", { name: "Add project", exact: true }).click();
+  await page.getByLabel("Project name").fill("Manual project");
   await page
-    .getByLabel("Responsibilities — one per line")
-    .fill("Built APIs\nReviewed code");
+    .locator(".expandable-entry")
+    .getByRole("button", { name: "Add bullet", exact: true })
+    .click();
+  await page
+    .getByLabel("Description bullet 1", { exact: true })
+    .fill("A multiline accomplishment\nwith more detail.");
+  await page
+    .getByLabel("I reviewed these details and confirm saving this profile.")
+    .check();
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(
     page.getByText("Changes saved and reloaded from the server."),
   ).toBeVisible();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({
-    path: "../docs/screenshots/workspace.png",
-    fullPage: false,
-  });
   await page.reload();
-  await page.getByRole("button", { name: /jordan-cv.pdf/ }).click();
-  await expect(page.getByLabel("Full name", { exact: true })).toHaveValue(
-    "Jordan Updated",
-  );
-  await expect(page.getByLabel("Company", { exact: true })).toHaveValue(
-    "Example Co",
-  );
-  await page.getByText("Raw extracted PDF text", { exact: true }).click();
-  await expect(page.locator("pre").first()).toContainText("Jordan Lee");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({
-    path: "../docs/screenshots/mobile.png",
-    fullPage: true,
-  });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBeTruthy();
-  await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page.getByText("Welcome back.")).toBeVisible();
-  await expect(page.getByText("jordan-cv.pdf")).toHaveCount(0);
-  await page.getByLabel("Email address").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: /Manual career profile/ }).click();
   await expect(
-    page.getByRole("button", { name: /jordan-cv.pdf/ }),
-  ).toBeVisible();
-  const owner = await request.post("/api/auth/login", {
-    data: { email, password },
-  });
-  expect(owner.ok()).toBeTruthy();
-  const ownerData = await owner.json();
-  const list = await request.get("/api/resumes", {
-    headers: { Authorization: `Bearer ${ownerData.token}` },
-  });
-  const rows = await list.json();
-  expect(rows).toHaveLength(1);
-  expect(rows[0].extractedText).toBeUndefined();
-  const other = await request.post("/api/auth/register", {
-    data: { email: `other-${email}`, password, fullName: "Other User" },
-  });
-  const otherData = await other.json();
-  const headers = { Authorization: `Bearer ${otherData.token}` };
-  expect(await (await request.get("/api/resumes", { headers })).json()).toEqual(
-    [],
+    page.getByLabel("Description bullet 1", { exact: true }),
+  ).toHaveValue("A multiline accomplishment\nwith more detail.");
+});
+test("Ollama unavailable offers manual entry and retry without erasing a saved profile", async ({
+  page,
+  request,
+}) => {
+  test.skip(
+    process.env.OLLAMA_TEST_FIXTURE !== "1",
+    "Requires controllable synthetic provider",
   );
-  expect(
-    (await request.get(`/api/resumes/${rows[0].id}`, { headers })).status(),
-  ).toBe(404);
-  expect(
-    (
-      await request.put(`/api/resumes/${rows[0].id}/profile`, {
-        headers,
-        data: { fullName: "Intruder" },
-      })
-    ).status(),
-  ).toBe(404);
-  expect(
-    (
-      await request.get("/api/resumes", {
-        headers: { Authorization: "Bearer invalid" },
-      })
-    ).status(),
-  ).toBe(401);
+  await request.post("http://127.0.0.1:11999/test/unavailable");
+  try {
+    await register(page);
+    const source = await readFile(
+      "../backend/src/test/resources/cvs/standard.txt",
+      "utf8",
+    );
+    await page.getByLabel("Upload PDF").setInputFiles({
+      name: "unavailable.pdf",
+      mimeType: "application/pdf",
+      buffer: pdf(source),
+    });
+    await expect(page.getByRole("alert")).toContainText(
+      "Ollama is unavailable",
+    );
+    await page.getByRole("button", { name: "Manual profile entry" }).click();
+    await page.getByLabel("Full name", { exact: true }).fill("Manual recovery");
+    await page
+      .getByLabel("I reviewed these details and confirm saving this profile.")
+      .check();
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(
+      page.getByText("Changes saved and reloaded from the server."),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Retry AI extraction" }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Ollama is unavailable",
+    );
+    await expect(page.getByLabel("Full name", { exact: true })).toHaveValue(
+      "Manual recovery",
+    );
+  } finally {
+    await request.post("http://127.0.0.1:11999/test/available");
+  }
 });

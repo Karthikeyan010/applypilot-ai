@@ -115,6 +115,11 @@ describe("connected workspace", () => {
     await user.click(await screen.findByRole("button", { name: /cv.pdf/ }));
     await user.clear(await screen.findByLabelText("Full name"));
     await user.type(screen.getByLabelText("Full name"), "Updated Name");
+    await user.click(
+      screen.getByLabelText(
+        "I reviewed these details and confirm saving this profile.",
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(
       await screen.findByText("Changes saved and reloaded from the server."),
@@ -205,6 +210,11 @@ describe("connected workspace", () => {
     );
     const fields = screen.getAllByLabelText("Project name");
     await user.type(fields[1], "New project");
+    await user.click(
+      screen.getByLabelText(
+        "I reviewed these details and confirm saving this profile.",
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Check your details",
@@ -260,4 +270,75 @@ it("keeps login failures safe and actionable", async () => {
     "Check your credentials",
   );
   expect(screen.queryByText("sensitive-server-detail")).not.toBeInTheDocument();
+});
+
+it("requires confirmation of an AI draft and never silently replaces a saved profile", async () => {
+  signIn();
+  const draft = {
+    profile: { ...profile, fullName: "AI Name" },
+    warnings: [{ field: "phone", message: "Unsupported value removed." }],
+    provider: "ollama",
+    model: "test",
+  };
+  fetchMock.mockImplementation((url: string) =>
+    response(
+      url === "/api/resumes"
+        ? [summary]
+        : { ...resume, extractionDraft: draft },
+    ),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: /cv.pdf/ }));
+  expect(await screen.findByLabelText("Full name")).toHaveValue("Jordan Lee");
+  await user.click(
+    screen.getByRole("button", { name: "Review AI draft instead" }),
+  );
+  expect(screen.getByLabelText("Full name")).toHaveValue("AI Name");
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  expect(screen.getByText(/Unsupported value removed/)).toBeVisible();
+  await user.click(
+    screen.getByLabelText(
+      "I reviewed these details and confirm saving this profile.",
+    ),
+  );
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+  await user.type(screen.getByLabelText("Full name"), " edit");
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
+it("creates a profile without a PDF or inference and supports manual fields", async () => {
+  signIn();
+  vi.spyOn(window, "prompt").mockReturnValue("Manual profile");
+  fetchMock.mockImplementation((url: string) =>
+    response(
+      url === "/api/resumes"
+        ? []
+        : {
+            ...resume,
+            fileName: "Manual profile",
+            parsedProfile: null,
+            extractionDraft: null,
+            extractedText: "",
+          },
+    ),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByText("A fresh start");
+  await user.click(
+    screen.getByRole("button", { name: "Create profile without a PDF" }),
+  );
+  expect(await screen.findByLabelText("Full name")).toHaveValue("");
+  expect(
+    fetchMock.mock.calls.some(
+      (c) => c[0] === "/api/resumes/manual" && c[1].method === "POST",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Retry AI extraction" }),
+  ).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Add project" }));
+  await user.type(screen.getByLabelText("Project name"), "Manual project");
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });

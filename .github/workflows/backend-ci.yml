@@ -2,9 +2,9 @@ name: Backend CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/frontend-mvp]
   push:
-    branches: [main]
+    branches: [main, feat/frontend-mvp]
 
 permissions:
   contents: read

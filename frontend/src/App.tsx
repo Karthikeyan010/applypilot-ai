@@ -24,6 +24,7 @@ import {
   type Summary,
   type Entry,
 } from "./api";
+import { EntrySection } from "./EntryEditor";
 const date = (value: string) =>
   new Date(value).toLocaleString(undefined, {
     dateStyle: "medium",
@@ -39,6 +40,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [editingDraft, setEditingDraft] = useState(false);
   const [libraryError, setLibraryError] = useState("");
   const generation = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -51,6 +54,8 @@ export default function App() {
     setProfile({});
     setHistory([]);
     setDirty(false);
+    setConfirmed(false);
+    setEditingDraft(false);
     setBusy("");
     setError(message);
     setNotice("");
@@ -130,12 +135,29 @@ export default function App() {
   }
   function install(value: Resume) {
     setResume(value);
-    setProfile(
-      structuredClone(
-        value.parsedProfile || { originalText: value.extractedText },
+    setHistory((rows) =>
+      rows.map((row) =>
+        row.id === value.id
+          ? {
+              ...row,
+              hasProfile: !!value.parsedProfile,
+              hasDraft: !!value.extractionDraft,
+              parsingError: value.parsingError,
+            }
+          : row,
       ),
     );
-    setDirty(false);
+    setProfile(
+      structuredClone(
+        value.parsedProfile ||
+          value.extractionDraft?.profile || {
+            originalText: value.extractedText,
+          },
+      ),
+    );
+    setDirty(!!value.extractionDraft && !value.parsedProfile);
+    setConfirmed(false);
+    setEditingDraft(!!value.extractionDraft && !value.parsedProfile);
   }
   async function select(id: number) {
     if (!canLeave() || !session) return;
@@ -200,11 +222,14 @@ export default function App() {
           fileName: value.fileName,
           uploadedAt: value.uploadedAt,
           hasProfile: !!value.parsedProfile,
+          hasDraft: !!value.extractionDraft,
           parsingError: value.parsingError,
         },
         ...rows,
       ]);
-      setNotice("PDF saved. Review the extracted details below.");
+      setNotice(
+        "PDF saved. AI output is a draft; review the evidence and confirm before saving.",
+      );
     } catch (e) {
       if (g === generation.current) failure(e);
     } finally {
@@ -212,9 +237,68 @@ export default function App() {
       if (fileInput.current) fileInput.current.value = "";
     }
   }
+  async function createManual() {
+    if (!session || !canLeave()) return;
+    const name = window.prompt(
+      "Give this manual profile a name:",
+      "My career profile",
+    );
+    if (!name?.trim()) return;
+    const g = generation.current;
+    setBusy("Creating manual profile");
+    setError("");
+    try {
+      const value = await request<Resume>("/resumes/manual", session.token, {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if (g !== generation.current) return;
+      install(value);
+      setDirty(true);
+      setHistory((rows) => [
+        {
+          id: value.id,
+          fileName: value.fileName,
+          uploadedAt: value.uploadedAt,
+          hasProfile: false,
+          parsingError: null,
+        },
+        ...rows,
+      ]);
+    } catch (e) {
+      if (g === generation.current) failure(e);
+    } finally {
+      if (g === generation.current) setBusy("");
+    }
+  }
+  async function retryExtraction() {
+    if (!session || !resume || !canLeave()) return;
+    const g = generation.current;
+    setBusy("Extracting AI draft (this may take a few minutes)");
+    setError("");
+    setNotice("");
+    try {
+      const value = await request<Resume>(
+        `/resumes/${resume.id}/extraction`,
+        session.token,
+        { method: "POST" },
+      );
+      if (g !== generation.current) return;
+      install(value);
+      setNotice(
+        value.extractionDraft
+          ? "New draft ready for review. Your saved profile is unchanged."
+          : "Extraction did not produce a draft. Manual entry is available.",
+      );
+    } catch (e) {
+      if (g === generation.current) failure(e);
+    } finally {
+      if (g === generation.current) setBusy("");
+    }
+  }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (!resume || !session) return;
+    if (!resume || !session || !confirmed) return;
     const g = generation.current;
     setBusy("Saving and verifying profile");
     setError("");
@@ -251,6 +335,7 @@ export default function App() {
   function change(key: keyof Profile, value: unknown) {
     setProfile((p) => ({ ...p, [key]: value }));
     setDirty(true);
+    setConfirmed(false);
     setNotice("");
   }
   if (!session)
@@ -353,7 +438,8 @@ export default function App() {
             </p>
             <div className="privacy">
               <ShieldCheck size={18} />
-              Your CV stays in your local backend. No external AI service.
+              CV text is sent only to your configured local or private Ollama
+              server.
             </div>
           </div>
         </main>
@@ -435,6 +521,17 @@ export default function App() {
             </div>
             <span className="version">MVP / 01</span>
           </div>
+          <div className="manual-create">
+            <button
+              type="button"
+              className="secondary"
+              disabled={!!busy}
+              onClick={() => void createManual()}
+            >
+              Create profile without a PDF
+            </button>
+            <span>Start from scratch · No AI required</span>
+          </div>
           <section className="upload-panel">
             <div className="upload-icon">
               <Upload size={28} />
@@ -515,7 +612,7 @@ export default function App() {
                   >
                     <span className="pdf-icon">
                       <FileText size={22} />
-                      <small>PDF</small>
+                      <small>CV</small>
                     </span>
                     <span className="resume-meta">
                       <strong>{item.fileName}</strong>
@@ -527,9 +624,11 @@ export default function App() {
                       >
                         {item.parsingError
                           ? "Needs review"
-                          : item.hasProfile
-                            ? "Profile available"
-                            : "Ready for manual entry"}
+                          : item.hasDraft
+                            ? "AI draft awaiting review"
+                            : item.hasProfile
+                              ? "Profile available"
+                              : "Ready for manual entry"}
                       </span>
                     </span>
                     <ChevronRight size={16} />
@@ -561,25 +660,100 @@ export default function App() {
                       <p>Uploaded {date(resume.uploadedAt)}</p>
                     </div>
                     <span className="pill">
-                      {dirty ? "Unsaved changes" : "Saved profile"}
+                      {editingDraft
+                        ? "Unverified AI draft"
+                        : dirty
+                          ? "Unsaved changes"
+                          : resume.parsedProfile
+                            ? resume.profileConfirmedAt
+                              ? "User-confirmed profile"
+                              : "Saved profile · awaiting review"
+                            : "Manual entry"}
                     </span>
                   </div>
-                  {resume.parsingError ? (
+                  {resume.parsingError && (
                     <div className="alert warning" role="alert">
-                      {resume.parsingError} You can enter a profile manually;
-                      the source text is preserved.
-                    </div>
-                  ) : !resume.parsedProfile ? (
-                    <div className="alert warning">
-                      No structured profile is available. Enter details manually
-                      using the PDF text below.
-                    </div>
-                  ) : (
-                    <div className="review-note">
-                      <Check size={16} />
-                      Extraction available. Review for accuracy before saving.
+                      {resume.parsingError}
                     </div>
                   )}
+                  <div className="extraction-toolbar">
+                    <p>
+                      {editingDraft
+                        ? "Editing an unverified AI draft. Confirming it replaces the saved profile; review all fields before saving."
+                        : resume.parsedProfile
+                          ? "Showing your saved profile. AI re-extraction never changes it automatically."
+                          : "Create your profile manually or review an AI draft."}
+                    </p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={!!busy || !resume.extractedText}
+                      onClick={() => void retryExtraction()}
+                    >
+                      Retry AI extraction
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={!!busy}
+                      onClick={() => {
+                        if (canLeave()) {
+                          setProfile(
+                            structuredClone(
+                              resume.parsedProfile || {
+                                originalText: resume.extractedText,
+                                unmatchedText: resume.extractedText,
+                              },
+                            ),
+                          );
+                          setEditingDraft(false);
+                          setDirty(!resume.parsedProfile);
+                          setConfirmed(false);
+                        }
+                      }}
+                    >
+                      Manual profile entry
+                    </button>
+                    {resume.extractionDraft && !editingDraft && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={!!busy}
+                        onClick={() => {
+                          if (canLeave()) {
+                            setProfile(
+                              structuredClone(resume.extractionDraft!.profile),
+                            );
+                            setEditingDraft(true);
+                            setDirty(true);
+                            setConfirmed(false);
+                          }
+                        }}
+                      >
+                        Review AI draft instead
+                      </button>
+                    )}
+                  </div>
+                  {resume.extractionDraft && (
+                    <details className="draft-warnings" open>
+                      <summary>
+                        AI review notes · {resume.extractionDraft.provider} /{" "}
+                        {resume.extractionDraft.model}
+                      </summary>
+                      <ul>
+                        {resume.extractionDraft.warnings.map((warning, i) => (
+                          <li key={i}>
+                            <strong>{warning.field}</strong>: {warning.message}
+                          </li>
+                        ))}
+                      </ul>
+                      <p>
+                        Source matching cannot prove that a bullet belongs to
+                        the right project. Check grouping and omissions
+                        yourself.
+                      </p>
+                    </details>
+                  )}{" "}
                   <form onSubmit={save}>
                     <fieldset disabled={!!busy}>
                       <div className="form-section">
@@ -676,6 +850,15 @@ export default function App() {
                           </pre>
                         </details>
                       </div>
+                      <label className="confirmation">
+                        <input
+                          type="checkbox"
+                          checked={confirmed}
+                          onChange={(e) => setConfirmed(e.target.checked)}
+                        />
+                        I reviewed these details and confirm saving this
+                        profile.
+                      </label>
                       <div className="save-bar">
                         <span>
                           {dirty
@@ -696,7 +879,10 @@ export default function App() {
                         >
                           Discard
                         </button>
-                        <button className="primary" disabled={!dirty}>
+                        <button
+                          className="primary"
+                          disabled={!dirty || !confirmed}
+                        >
                           <Check size={17} />
                           Save changes
                         </button>
@@ -732,7 +918,7 @@ export default function App() {
           </div>
           <footer>
             ApplyPilot AI <span>Built for your next chapter.</span>
-            <span>Rule-based extraction · Review always recommended</span>
+            <span>Local AI extraction · User confirmation required</span>
           </footer>
         </main>
       </div>
@@ -769,137 +955,5 @@ function ListField({
         }
       />
     </label>
-  );
-}
-const schemas = {
-  education: [
-    "institution",
-    "degree",
-    "fieldOfStudy",
-    "startDate",
-    "endDate",
-    "location",
-  ],
-  experience: [
-    "company",
-    "jobTitle",
-    "jobTittle",
-    "startDate",
-    "endDate",
-    "location",
-    "responsibilities",
-  ],
-  projects: ["name", "technologies", "description"],
-};
-const labels: Record<string, string> = {
-  institution: "Institution",
-  degree: "Degree",
-  fieldOfStudy: "Field of study",
-  startDate: "Start date",
-  endDate: "End date",
-  location: "Location",
-  company: "Company",
-  jobTitle: "Job title",
-  jobTittle: "Legacy job title",
-  responsibilities: "Responsibilities",
-  name: "Project name",
-  technologies: "Technologies",
-  description: "Description",
-};
-function EntrySection({
-  name,
-  number,
-  entries,
-  onChange,
-}: {
-  name: keyof typeof schemas;
-  number: number;
-  entries?: Entry[] | null;
-  onChange: (v: Entry[]) => void;
-}) {
-  const rows = entries ?? [];
-  function update(i: number, key: string, value: string | string[]) {
-    onChange(
-      rows.map((entry, index) =>
-        index === i ? { ...entry, [key]: value } : entry,
-      ),
-    );
-  }
-  return (
-    <div className="form-section">
-      <div className="section-heading">
-        <h3>
-          0{number}{" "}
-          <span>
-            {name === "experience"
-              ? "Work experience"
-              : name[0].toUpperCase() + name.slice(1)}
-          </span>
-        </h3>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => onChange([...rows, {}])}
-        >
-          <Plus size={15} />
-          Add{" "}
-          {name === "education"
-            ? "education"
-            : name === "experience"
-              ? "experience"
-              : "project"}
-        </button>
-      </div>
-      {!rows.length && (
-        <p>No entries yet. Add any details the parser missed.</p>
-      )}
-      {rows.map((entry, i) => (
-        <div className="entry" key={i}>
-          <div className="section-heading">
-            <strong>Entry {i + 1}</strong>
-            <button
-              type="button"
-              className="remove"
-              aria-label={`Remove ${name} ${i + 1}`}
-              onClick={() => onChange(rows.filter((_, index) => index !== i))}
-            >
-              <Trash2 size={15} />
-              Remove
-            </button>
-          </div>
-          <div className="field-grid">
-            {schemas[name]
-              .filter((key) => key !== "jobTittle" || entry[key] != null)
-              .map((key) =>
-                ["responsibilities", "technologies", "description"].includes(
-                  key,
-                ) ? (
-                  <ListField
-                    key={key}
-                    label={`${labels[key]} — one per line`}
-                    value={entry[key] as string[] | null}
-                    onChange={(v) => update(i, key, v)}
-                  />
-                ) : (
-                  <label key={key}>
-                    {labels[key]}
-                    <input
-                      maxLength={1000}
-                      value={(entry[key] as string) ?? ""}
-                      onChange={(e) => update(i, key, e.target.value)}
-                    />
-                  </label>
-                ),
-              )}
-          </div>
-          {entry.originalText && (
-            <details>
-              <summary>Original entry text</summary>
-              <pre>{entry.originalText}</pre>
-            </details>
-          )}
-        </div>
-      ))}
-    </div>
   );
 }

@@ -1064,3 +1064,122 @@ footer > span:last-child {
     scroll-behavior: auto !important;
   }
 }
+.manual-create {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin: 0 0 18px;
+}
+.manual-create span {
+  font-size: 11px;
+  color: #6c7e80;
+}
+.extraction-toolbar {
+  padding: 20px 26px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: #f3f7f0;
+}
+.extraction-toolbar p {
+  width: 100%;
+  font-size: 12px;
+}
+.draft-warnings {
+  margin: 18px 24px;
+  padding: 4px 12px;
+  background: #fff9ec;
+}
+.draft-warnings li {
+  font-size: 12px;
+  line-height: 1.7;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.draft-warnings p {
+  font-size: 11px;
+  padding: 8px;
+}
+.confirmation {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 22px 26px;
+  background: #f1f5ed;
+  line-height: 1.7;
+}
+.confirmation input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.expandable-entry {
+  padding: 0 !important;
+}
+.expandable-entry > summary {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+.expandable-entry > summary small {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+}
+.entry-body {
+  padding: 0 18px 20px;
+}
+.entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+}
+.entry-actions button {
+  font-size: 11px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid #d8e1d2;
+  background: #fff;
+  border-radius: 5px;
+  padding: 7px;
+}
+.bullet-editor {
+  margin-top: 22px;
+  border-top: 1px solid #e1e7dd;
+  padding-top: 18px;
+}
+.bullet-editor > strong {
+  font-size: 12px;
+}
+.bullet-row {
+  margin-top: 16px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid #e2e8df;
+  border-radius: 7px;
+}
+.bullet-row textarea {
+  min-height: 110px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.entry-body .field-grid {
+  margin-bottom: 22px;
+}
+@media (max-width: 460px) {
+  .manual-create {
+    align-items: start;
+    flex-direction: column;
+  }
+  .entry-body {
+    padding: 0 10px 14px;
+  }
+  .bullet-row {
+    padding: 10px;
+  }
+  .entry-actions {
+    gap: 6px;
+  }
+}
