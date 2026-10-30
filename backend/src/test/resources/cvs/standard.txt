@@ -1,0 +1,13 @@
+Jordan Lee
+jordan@example.com
+PROJECTS
+Scalable Bookstore Microservices Platform
+Tech stack: Java, Spring Boot, PostgreSQL
+• Built an inventory service with Java.
+• Added resilient checkout workflows.
+• Deployed services with Docker.
+EXPERIENCE
+Engineer | Example Co | 2023 - Present
+• Built REST APIs.
+• Reviewed code with the team.
+• Improved automated tests.

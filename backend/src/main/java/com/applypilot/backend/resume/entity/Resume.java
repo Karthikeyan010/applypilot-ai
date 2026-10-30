@@ -40,6 +40,13 @@ public class Resume {
     @Column(name = "parsing_error", length = 200)
     private String parsingError;
 
+    @Convert(converter = ResumeDraftConverter.class)
+    @Column(name = "extraction_draft", columnDefinition = "text")
+    private com.applypilot.backend.resume.parsing.ResumeParsingResult extractionDraft;
+
+    @Column(name = "profile_confirmed_at")
+    private LocalDateTime profileConfirmedAt;
+
     @PrePersist
     protected void onCreate(){
         this.uploadedAt = LocalDateTime.now();

@@ -4,4 +4,4 @@ import java.time.LocalDateTime;
 
 /** History metadata only: never serialize a user entity or resume contents. */
 public record ResumeSummaryResponse(Long id, String fileName, LocalDateTime uploadedAt,
-                                    boolean hasProfile, String parsingError) {}
+                                    boolean hasProfile, boolean hasDraft, String parsingError) {}

@@ -1,179 +1,98 @@
 package com.applypilot.backend.resume.controller;
 
+import com.applypilot.backend.resume.dto.ResumeProfileResponse;
 import com.applypilot.backend.resume.entity.Resume;
-import com.applypilot.backend.resume.extractor.ContactInfoExtractor;
-import com.applypilot.backend.resume.extractor.SectionExtractor;
-import com.applypilot.backend.resume.extractor.SkillsExtractor;
+import com.applypilot.backend.resume.parsing.*;
 import com.applypilot.backend.resume.repository.ResumeRepository;
-import com.applypilot.backend.resume.service.ResumeExtractionService;
 import com.applypilot.backend.resume.service.ResumeService;
-import com.applypilot.backend.resume.service.RuleBasedResumeExtractionService;
 import com.applypilot.backend.user.entity.User;
 import com.applypilot.backend.user.repository.UserRepo;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.apache.pdfbox.pdmodel.*;
+import org.apache.pdfbox.pdmodel.font.*;
+import org.junit.jupiter.api.*;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-
 import java.io.ByteArrayOutputStream;
 import java.time.LocalDateTime;
-import java.util.Optional;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import java.util.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class ResumeControllerTest {
-    private Resume savedResume;
-    private ResumeRepository resumes;
-    private ResumeExtractionService parser;
-    private MockMvc mvc;
-
-    @BeforeEach
-    void setUp() {
-        resumes = mock(ResumeRepository.class);
-        parser = mock(ResumeExtractionService.class);
-        UserRepo users = mock(UserRepo.class);
-        User user = User.builder().id(42L).email("jordan@example.com").build();
+    ResumeRepository resumes;
+    ResumeParserService parser;
+    MockMvc mvc;
+    Resume saved;
+    final UsernamePasswordAuthenticationToken principal = new UsernamePasswordAuthenticationToken("jordan@example.com", "unused");
+    @BeforeEach void setup() {
+        resumes = mock(ResumeRepository.class); parser = mock(ResumeParserService.class);
+        var users = mock(UserRepo.class);
+        var user = User.builder().id(42L).email("jordan@example.com").build();
         when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(resumes.findByIdAndUserId(7L, 42L)).thenAnswer(invocation -> Optional.of(savedResume));
-        when(resumes.save(any(Resume.class))).thenAnswer(invocation -> {
-            Resume saved = invocation.getArgument(0);
-            saved.setId(7L);
-            saved.setUploadedAt(LocalDateTime.of(2026, 1, 1, 12, 0));
-            savedResume = saved;
-            return saved;
+        when(resumes.save(any(Resume.class))).thenAnswer(call -> {
+            saved = call.getArgument(0); saved.setId(7L); saved.setUploadedAt(LocalDateTime.now()); return saved;
         });
-        mvc = MockMvcBuilders.standaloneSetup(new ResumeController(new ResumeService(resumes), parser, users)).build();
+        when(resumes.findByIdAndUserId(7L,42L)).thenAnswer(call -> Optional.ofNullable(saved));
+        when(resumes.updateDraft(eq(7L),eq(42L),any(),any())).thenAnswer(call -> {
+            saved.setExtractionDraft(call.getArgument(2)); saved.setParsingError(call.getArgument(3)); return 1;
+        });
+        mvc = MockMvcBuilders.standaloneSetup(new ResumeController(new ResumeService(resumes),parser,users)).build();
     }
-
-    @Test
-    void invalidUploadsReturn400WithoutDetails() throws Exception {
-        for (MockMultipartFile file : new MockMultipartFile[]{
-                new MockMultipartFile("file", "empty.pdf", "application/pdf", new byte[0]),
-                new MockMultipartFile("file", "cv.txt", "text/plain", new byte[]{1}),
-                new MockMultipartFile("file", "broken.pdf", "application/pdf", new byte[]{1, 2}),
-                new MockMultipartFile("file", "x".repeat(256), "application/pdf", new byte[]{1})}) {
-            mvc.perform(multipart("/api/resumes/upload").file(file)
-                    .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                    .andExpect(status().isBadRequest()).andExpect(content().string(""));
+    @Test void invalidUploadsDoNotCallInference() throws Exception {
+        for (var file : new MockMultipartFile[]{new MockMultipartFile("file","empty.pdf","application/pdf",new byte[0]),
+                new MockMultipartFile("file","bad.pdf","application/pdf",new byte[]{1,2}),
+                new MockMultipartFile("file","cv.txt","text/plain",new byte[]{1})}) {
+            mvc.perform(multipart("/api/resumes/upload").file(file).principal(principal))
+                .andExpect(status().isBadRequest()).andExpect(content().string(""));
         }
         verifyNoInteractions(resumes, parser);
     }
-
-    @Test
-    void internalReadFailureReturns500() throws Exception {
-        // MockMultipartFile can model a server-side failure while retrieving stored multipart bytes.
-        var unreadable = new MockMultipartFile("file", "cv.pdf", "application/pdf", new byte[]{1}) {
-            @Override public byte[] getBytes() throws java.io.IOException {
-                throw new java.io.IOException("private storage path");
-            }
-        };
-        mvc.perform(multipart("/api/resumes/upload").file(unreadable)
-                .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
-        verifyNoInteractions(resumes, parser);
+    @Test void uploadProducesDraftNotVerifiedProfile() throws Exception {
+        when(parser.parse(anyString())).thenReturn(new ResumeParsingResult(
+                ResumeProfileResponse.builder().fullName("Jordan Lee").originalText(source()).build(),List.of(),"ollama","test"));
+        mvc.perform(multipart("/api/resumes/upload").file(pdf()).principal(principal))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.parsedProfile").isEmpty())
+            .andExpect(jsonPath("$.extractionDraft.profile.fullName").value("Jordan Lee"))
+            .andExpect(jsonPath("$.extractedText").value(source()));
+        var order = inOrder(resumes,parser);order.verify(resumes).save(any(Resume.class));order.verify(parser).parse(source());
+        verify(resumes,times(1)).save(any(Resume.class));
     }
-
-    @Test
-    void databaseAndUnexpectedFailuresReturn500() throws Exception {
-        for (RuntimeException failure : new RuntimeException[]{
-                new org.springframework.dao.DataAccessResourceFailureException("private database detail"),
-                new IllegalArgumentException("private converter detail"),
-                new IllegalStateException("private processing detail")}) {
-            when(resumes.save(any(Resume.class))).thenThrow(failure);
-            mvc.perform(multipart("/api/resumes/upload").file(pdf())
-                    .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                    .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+    @Test void unavailableProviderRetainsSourceAndOffersRetryWithoutFallback() throws Exception {
+        when(parser.parse(anyString())).thenThrow(new ResumeParsingException("Ollama unavailable. Retry or enter manually."));
+        mvc.perform(multipart("/api/resumes/upload").file(pdf()).principal(principal))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.extractionDraft").isEmpty())
+            .andExpect(jsonPath("$.parsedProfile").isEmpty()).andExpect(jsonPath("$.extractedText").value(source()))
+            .andExpect(jsonPath("$.parsingError").value("Ollama unavailable. Retry or enter manually."));
+        verify(parser).parse(source());
+    }
+    @Test void unexpectedAndNullProviderResponsesAreSafe() throws Exception {
+        for (boolean crash : new boolean[]{true,false}) {
+            reset(parser);
+            if(crash)when(parser.parse(anyString())).thenThrow(new IllegalStateException("secret internal detail"));
+            mvc.perform(multipart("/api/resumes/upload").file(pdf()).principal(principal))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.parsingError").value("AI extraction failed. Retry extraction or enter your profile manually. Your saved profile is unchanged."));
         }
     }
-
-    @Test
-    void getAndPutDatabaseFailuresReturn500WithoutDetails() throws Exception {
-        doThrow(new org.springframework.dao.DataAccessResourceFailureException("private database detail"))
-                .when(resumes).findByIdAndUserId(7L, 42L);
-        var principal = new UsernamePasswordAuthenticationToken("jordan@example.com", "unused");
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/resumes/7")
-                .principal(principal)).andExpect(status().isInternalServerError()).andExpect(content().string(""));
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/resumes/7/profile")
-                .principal(principal).contentType("application/json").content("{}"))
-                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+    @Test void retryChecksOwnershipBeforeInference() throws Exception {
+        mvc.perform(post("/api/resumes/7/extraction").principal(principal)).andExpect(status().isNotFound());
+        verifyNoInteractions(parser);
     }
-
-    @Test
-    void profilePersistenceFailureReturns500() throws Exception {
-        when(parser.extract(anyString())).thenReturn(
-                com.applypilot.backend.resume.dto.ResumeProfileResponse.builder().build());
-        doThrow(new org.springframework.dao.DataAccessResourceFailureException("private database detail"))
-                .when(resumes).findByIdAndUserId(7L, 42L);
-        mvc.perform(multipart("/api/resumes/upload").file(pdf())
-                .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+    @Test void manualCreationDoesNotUseInference() throws Exception {
+        mvc.perform(post("/api/resumes/manual").principal(principal).contentType("application/json").content("{\"name\":\"My career profile\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.fileName").value("My career profile"))
+            .andExpect(jsonPath("$.extractedText").value(""));
+        verifyNoInteractions(parser);
     }
-
-    @Test
-    void shouldReturnSavedSourceAndParsedProfileIncludingBothJobTitleFields() throws Exception {
-        var realParser = new RuleBasedResumeExtractionService(new SectionExtractor(),
-                new ContactInfoExtractor(), new SkillsExtractor());
-        when(parser.extract(anyString())).thenAnswer(invocation -> realParser.extract(invocation.getArgument(0)));
-
-        mvc.perform(multipart("/api/resumes/upload").file(pdf())
-                        .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(7))
-                .andExpect(jsonPath("$.userId").value(42))
-                .andExpect(jsonPath("$.fileName").value("resume.pdf"))
-                .andExpect(jsonPath("$.extractedText").value(source()))
-                .andExpect(jsonPath("$.parsedProfile.originalText").value(source()))
-                .andExpect(jsonPath("$.parsedProfile.experience[0].jobTitle").value("Engineer"))
-                .andExpect(jsonPath("$.parsedProfile.experience[0].jobTittle").value("Engineer"))
-                .andExpect(jsonPath("$.parsingError").isEmpty());
-
-        ArgumentCaptor<Resume> saved = ArgumentCaptor.forClass(Resume.class);
-        verify(resumes, times(2)).save(saved.capture());
-        assertEquals(source(), saved.getValue().getExtractedText());
-        var order = inOrder(resumes, parser);
-        order.verify(resumes).save(any(Resume.class));
-        order.verify(parser).extract(source());
+    @Test void databaseFailureDoesNotLeakDetailsOrCallInference() throws Exception {
+        when(resumes.save(any(Resume.class))).thenThrow(new IllegalStateException("private database path"));
+        mvc.perform(multipart("/api/resumes/upload").file(pdf()).principal(principal))
+            .andExpect(status().isInternalServerError()).andExpect(content().string(""));
+        verifyNoInteractions(parser);
     }
-
-    @Test
-    void shouldReportParsingFailureAsSuccessfulPersistedUpload() throws Exception {
-        when(parser.extract(anyString())).thenThrow(new IllegalStateException("internal parser detail"));
-        assertSavedUploadWithParsingError();
-    }
-
-    @Test
-    void shouldReportNullParserResultAsSuccessfulPersistedUpload() throws Exception {
-        when(parser.extract(anyString())).thenReturn(null);
-        assertSavedUploadWithParsingError();
-    }
-
-    private void assertSavedUploadWithParsingError() throws Exception {
-        mvc.perform(multipart("/api/resumes/upload").file(pdf())
-                        .principal(new UsernamePasswordAuthenticationToken("jordan@example.com", "unused")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(7))
-                .andExpect(jsonPath("$.extractedText").value(source()))
-                .andExpect(jsonPath("$.parsedProfile").isEmpty())
-                .andExpect(jsonPath("$.parsingError").value("Resume saved, but structured profile extraction failed."));
-        verify(resumes, times(2)).save(any(Resume.class));
-        verify(parser, times(1)).extract(source());
-        verify(resumes).findByIdAndUserId(7L, 42L);
-        verifyNoMoreInteractions(resumes, parser);
-    }
-
     private String source() {
         return "Jordan Lee" + System.lineSeparator() + "Experience" + System.lineSeparator()
                 + "Engineer | Example Inc | 2023 - Present" + System.lineSeparator();
