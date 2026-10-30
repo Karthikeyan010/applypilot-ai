@@ -1,5 +1,7 @@
 # Run the frontend MVP locally
 
+> Updated parsing/editor behavior and Ollama setup: [AI-first resume guide](AI-FIRST-RESUMES.md). The original issue #15 walkthrough below describes the initial MVP; automatic imports now produce unverified drafts and require the review checkbox before save.
+
 Requires Java 21, Node.js 24 (with npm), Git, and Docker Desktop / Docker Engine running Linux containers. No paid service or AI API key is needed.
 
 ## Windows (PowerShell)
@@ -103,4 +105,3 @@ The JWT and display identity are stored in **sessionStorage** so refresh works w
 Authentication errors from the existing backend can have generic statuses; the UI intentionally gives a safe credentials/unique-email message. Backend changes are limited to the missing list endpoint and allowing internal servlet ERROR dispatches so real HTTP 4xx statuses are preserved (direct requests remain protected). History is metadata-only and currently unpaginated. Profile updates are full replacement/last-write-wins, with no version history. Browser reload restores the library, then you select a CV. Only PDF text is stored, not downloadable PDF bytes. Source fields and untouched null/list/legacy values are preserved by cloning the loaded profile and patching only edited fields. Editing a list intentionally replaces that list using newline-separated values, including blank lines. Parser accuracy varies; unmatched text may duplicate extracted content.
 
 Job descriptions, matching and applications are disabled **Coming soon** controls. No matching scores or application data are simulated.
-
